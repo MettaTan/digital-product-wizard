@@ -27,12 +27,9 @@ You need 3 keys:
 Create your .env:
 
 ```
-bash
-Copy code
 cp .env.example .env
-Then edit .env and paste in your real keys.
 ```
-
+Then edit .env and paste in your real keys.
 (.env is already in .gitignore.)
 
 ### 4. Run the App
