@@ -1,0 +1,9 @@
+streamlit
+jamaibase
+python-dotenv
+notion-client
+openai
+whisper
+opencv-python
+pytesseract
+yt-dlp
