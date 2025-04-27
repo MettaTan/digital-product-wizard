@@ -1,0 +1,23 @@
+# Ignore environment files
+.env
+.notion_connection.json
+
+# Ignore temporary files
+temp_audio_0.wav
+temp_audio_1.wav
+temp_video.mp4
+temp_video.info.json
+temp_pdf_0.pdf
+temp_pdf_1.pdf
+temp_pdf_2.pdf
+temp_pdf_3.pdf
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# VS Code settings
+.vscode/
+
+# Mac system files
+.DS_Store
