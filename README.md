@@ -10,7 +10,6 @@ An AI-powered tool to help you create, remix, and launch digital products faster
 
 ```bash
 git clone https://github.com/MettaTan/digital-product-wizard.git
-cd digital-product-wizard
 ```
 
 ### 2. Install Dependencies
