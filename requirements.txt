@@ -3,7 +3,7 @@ jamaibase
 python-dotenv
 notion-client
 openai
-whisper
+openai-whisper
 opencv-python
 pytesseract
 yt-dlp

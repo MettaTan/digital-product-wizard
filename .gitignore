@@ -1,5 +1,6 @@
 # Ignore environment files
 .env
+venv
 .notion_connection.json
 
 # Ignore temporary files
