@@ -16,6 +16,7 @@ import pytesseract
 from collections import Counter
 import yt_dlp
 from urllib.parse import urlparse
+from auth_app import authenticate_user
 
 # Load environment variables
 load_dotenv()
@@ -26,8 +27,21 @@ jamai = JamAI(
     token=os.getenv("JAMAI_API_KEY")
 )
 
+# Authenticate user first
+name, email, paid_status, authenticated = authenticate_user()
+is_paid_user = paid_status
+
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 st.title("Digital Product Creator - Audio to Guide")
+
+if "audio_upload_count" not in st.session_state:
+    st.session_state.audio_upload_count = 0
+
+if "pdf_upload_count" not in st.session_state:
+    st.session_state.pdf_upload_count = 0
+
+if "remix_upload_count" not in st.session_state:
+    st.session_state.remix_upload_count = 0
 
 CONNECTION_FILE = ".notion_connection.json"
 tab1, tab2, tab3, tab4 = st.tabs(["Upload + Transcribe", "Create Outlines / Guides", "Connect to Notion", "Remix Existing Video"])
@@ -389,39 +403,66 @@ if "notion_api_key" not in st.session_state or "notion_parent_page_id" not in st
 
 with tab1:
     st.header("Upload Your Files")
+
+    # Limits
+    AUDIO_LIMIT = 3
+    PDF_LIMIT = 5
+
+    # Track counters (initialize if missing)
+    if "audio_upload_count" not in st.session_state:
+        st.session_state.audio_upload_count = 0
+    if "pdf_upload_count" not in st.session_state:
+        st.session_state.pdf_upload_count = 0
+
+    # Upload components
     audio_files = st.file_uploader("Upload up to 3 audio files", type=["mp3", "wav"], accept_multiple_files=True, key="audio_upload")
     pdf_files = st.file_uploader("Upload up to 5 PDF documents", type=["pdf"], accept_multiple_files=True, key="pdf_upload")
-    process_disabled = len(audio_files) > 3 or len(pdf_files) > 5
-    if len(audio_files) > 3:
-        st.error("❌ Maximum 3 audio files allowed.")
-    if len(pdf_files) > 5:
-        st.error("❌ Maximum 5 PDF documents allowed.")
-    if audio_files or pdf_files:
-        if st.button("▶️ Start Processing Uploaded Files", disabled=process_disabled):
-            st.info("🚀 Starting upload and embedding...")
-            total_files = len(audio_files) + len(pdf_files)
-            current_step = 0
-            progress_bar = st.progress(0)
-            for audio in audio_files:
-                with open("temp_audio.wav", "wb") as f:
-                    f.write(audio.read())
-                transcription = transcribe_audio_whisper("temp_audio.wav")
-                upload_transcription_to_knowledge(transcription, title=audio.name)
-                clean_temp_files()
-                current_step += 1
-                progress_bar.progress(current_step / total_files)
-            for pdf in pdf_files:
-                with open("temp.pdf", "wb") as f:
-                    f.write(pdf.read())
-                jamai.table.embed_file("temp.pdf", "knowledge-digital-products")
-                clean_temp_files()
-                current_step += 1
-                progress_bar.progress(current_step / total_files)
-            progress_bar.empty()
-            st.success("✅ All files processed and embedded!")
 
-    # --- Display Uploaded Files (Knowledge Table) ---
+    # --- Free user limit handling
+    if not is_paid_user:
+        st.info(f"🎧 Audio uploads used: {st.session_state.audio_upload_count}/{AUDIO_LIMIT}")
+        st.info(f"📄 PDF uploads used: {st.session_state.pdf_upload_count}/{PDF_LIMIT}")
 
+        if st.session_state.audio_upload_count >= AUDIO_LIMIT:
+            st.warning("❌ Free tier audio upload limit reached.")
+            audio_files = []  # Disable new uploads
+
+        if st.session_state.pdf_upload_count >= PDF_LIMIT:
+            st.warning("❌ Free tier PDF upload limit reached.")
+            pdf_files = []  # Disable new uploads
+
+    # --- Button conditions
+    process_disabled = (not audio_files and not pdf_files)
+
+    if (audio_files or pdf_files) and st.button("▶️ Start Processing Uploaded Files", disabled=process_disabled):
+        st.info("🚀 Starting upload and embedding...")
+        total_files = len(audio_files) + len(pdf_files)
+        current_step = 0
+        progress_bar = st.progress(0)
+
+        for audio in audio_files:
+            with open("temp_audio.wav", "wb") as f:
+                f.write(audio.read())
+            transcription = transcribe_audio_whisper("temp_audio.wav")
+            upload_transcription_to_knowledge(transcription, title=audio.name)
+            clean_temp_files()
+            current_step += 1
+            st.session_state.audio_upload_count += 1  # ✅ Increment
+            progress_bar.progress(current_step / total_files)
+
+        for pdf in pdf_files:
+            with open("temp.pdf", "wb") as f:
+                f.write(pdf.read())
+            jamai.table.embed_file("temp.pdf", "knowledge-digital-products")
+            clean_temp_files()
+            current_step += 1
+            st.session_state.pdf_upload_count += 1  # ✅ Increment
+            progress_bar.progress(current_step / total_files)
+
+        progress_bar.empty()
+        st.success("✅ All files processed and embedded!")
+
+    # --- Display Uploaded Files (Knowledge Table)
     st.divider()
     st.subheader("📚 Uploaded Files (Knowledge)")
 
@@ -434,19 +475,14 @@ with tab1:
             for row in rows.items:
                 title = row.get("Title", {}).get("value", "")
                 if title:
-                    titles[title] = titles.get(title, 0) + 1  # Count how many chunks/pages per file
+                    titles[title] = titles.get(title, 0) + 1
 
             for title_name, count in titles.items():
-                # Determine the icon based on file type
-                if title_name.lower().endswith((".mp3", ".wav", ".m4a")):
-                    icon = "🎵"  # Audio
-                else:
-                    icon = "📄"  # Generic file
+                icon = "🎵" if title_name.lower().endswith((".mp3", ".wav", ".m4a")) else "📄"
 
                 with st.expander(f"{icon} {title_name} ({count} pages)"):
                     st.markdown(f"**Uploaded File:** {title_name}")
                     if st.button(f"❌ Delete '{title_name}'", key=f"delete_{title_name}"):
-                        # Delete all rows with this Title
                         to_delete = [
                             row["ID"]
                             for row in rows.items
@@ -563,6 +599,17 @@ with tab3:
 with tab4:
     st.header("🎬 Remix an Existing Video")
 
+    REMIX_LIMIT = 10
+
+    if "remix_upload_count" not in st.session_state:
+        st.session_state.remix_upload_count = 0
+
+    if not is_paid_user:
+        st.info(f"🎥 You have used {st.session_state.remix_upload_count}/{REMIX_LIMIT} remix uploads.")
+        if st.session_state.remix_upload_count >= REMIX_LIMIT:
+            st.warning("❌ Free remix upload limit reached.")
+            st.stop()  # 🔒 Prevent further code from running
+
     st.markdown("Upload a video **or** paste a TikTok/Instagram link:")
     video_url = st.text_input("Paste a video URL (TikTok, IG Reels, etc.)")
     uploaded_video = st.file_uploader("Or upload a .mp4 file", type=["mp4"], key="video_upload")
@@ -647,6 +694,8 @@ Be creative, but follow the balance strictly.
             )
 
             remix_output = "".join(chunk.text for chunk in remix_response if hasattr(chunk, "text"))
+
+        st.session_state.remix_upload_count += 1
 
         st.subheader("🌀 Remix Ideas")
         st.markdown(remix_output)
