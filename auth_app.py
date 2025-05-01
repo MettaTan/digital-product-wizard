@@ -3,9 +3,11 @@ import streamlit as st
 import streamlit_authenticator as stauth
 
 # --- Simulated User Database ---
+hashed_pw = stauth.Hasher().generate(["password1", "password2"])
+
 users = {
-    "user1@gmail.com": {"password": stauth.Hasher(["password1"]).generate()[0], "paid": False},
-    "user2@gmail.com": {"password": stauth.Hasher(["password2"]).generate()[0], "paid": True},
+    "user1@gmail.com": {"password": hashed_pw[0], "paid": False},
+    "user2@gmail.com": {"password": hashed_pw[1], "paid": True},
 }
 
 names = ["User One", "User Two"]
