@@ -44,7 +44,7 @@ if "remix_upload_count" not in st.session_state:
     st.session_state.remix_upload_count = 0
 
 CONNECTION_FILE = ".notion_connection.json"
-tab1, tab2, tab3, tab4 = st.tabs(["Upload + Transcribe", "Create Outlines / Guides", "Connect to Notion", "Remix Existing Video"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Product Blueprint", "Upload + Transcribe", "Create Outlines / Guides", "Connect to Notion", "Remix Existing Video"])
 
 def download_video_from_url(url, output_path="downloaded_video.mp4"):
     """
@@ -283,6 +283,24 @@ def log_remix_to_jamai(video_url, remix_ideas, caption=""):
     except Exception as e:
         st.warning(f"⚠️ Failed to log remix to history: {e}")
 
+def log_outline_or_guide(user_input, content, is_guide=False):
+    try:
+        jamai.table.add_table_rows(
+            "action",
+            p.RowAddRequest(
+                table_id="action-outline-guide-history",
+                data=[{
+                    "user_input": user_input,
+                    "type": "guide" if is_guide else "outline",
+                    "content": content,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }],
+                stream=False
+            )
+        )
+    except Exception as e:
+        st.warning(f"⚠️ Failed to save to history: {e}")
+
 # 📜 New History Viewer Function
 def display_remix_history():
     st.subheader("📜 Remix History")
@@ -396,12 +414,135 @@ def display_outline_and_guide_history():
     except Exception as e:
         st.warning(f"⚠️ Failed to load guides: {e}")
 
+def display_product_blueprint_history():
+    st.subheader("📐 Product Blueprint History")
+
+    try:
+        rows = jamai.table.list_table_rows("action", "action-product-blueprint")
+        if not rows.items:
+            st.info("No product blueprints generated yet.")
+            return
+
+        for row in rows.items:
+            product_title = row.get("title", {}).get("value", "Untitled")
+            timestamp = row.get("timestamp", {}).get("value", "")
+            blueprint = row.get("product_blueprint", {}).get("value", "")
+            row_id = row.get("ID")
+
+            with st.expander(f"🧠 {product_title} — {timestamp}"):
+                st.markdown(blueprint or "_No blueprint found._")
+                if st.button(f"❌ Delete this blueprint", key=f"delete_blueprint_{row_id}"):
+                    jamai.table.delete_table_rows(
+                        "action",
+                        p.RowDeleteRequest(
+                            table_id="action-product-blueprint",
+                            row_ids=[row_id]
+                        )
+                    )
+                    st.success("✅ Deleted blueprint.")
+                    st.rerun()
+
+    except Exception as e:
+        st.warning(f"⚠️ Failed to load blueprint history: {e}")
+
 if "notion_api_key" not in st.session_state or "notion_parent_page_id" not in st.session_state:
     api_key, parent_page_id = load_connection_from_file()
     st.session_state.notion_api_key = api_key
     st.session_state.notion_parent_page_id = parent_page_id
 
 with tab1:
+    st.header("🎯 Product Blueprint")
+
+    st.markdown("Define the **core strategy** behind your digital product. This helps us generate outlines, guides, and creative assets that are aligned and monetizable.")
+
+    with st.form("blueprint_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            target_audience = st.text_input("Who is this product for? (Target Audience)")
+        with col2:
+            transformation = st.text_input("What outcome does it deliver? (Big Promise)")
+
+        col3, col4 = st.columns(2)
+        with col3:
+            delivery_method = st.selectbox("How will it be delivered?", ["Video Course", "eBook", "Live Cohort", "Templates", "Toolkit", "Workshop", "PDF Guide"])
+        with col4:
+            product_title = st.text_input("What is the working title?")
+
+        product_pitch = st.text_area("One-Line Product Pitch (optional)", placeholder="e.g. A 7-day toolkit to help side hustlers launch their first online product with zero audience.")
+
+        blueprint_submitted = st.form_submit_button("🧠 Generate Product Blueprint")
+
+    if blueprint_submitted and target_audience and transformation and product_title:
+        blueprint_prompt = f"""
+You're an elite digital product strategist. Based on the following inputs, create a concise product blueprint that defines the offer and pitch for a profitable digital product.
+
+Target Audience: {target_audience}
+Big Promise / Outcome: {transformation}
+Delivery Method: {delivery_method}
+Product Title: {product_title}
+Optional Pitch: {product_pitch}
+
+Include:
+- Product Subtitle or Tagline
+- Core Transformation (One Sentence)
+- 3–5 Sales Bullet Points
+- 1–2 Positioning Notes (what makes it unique or timely)
+"""
+
+        with st.spinner("🎨 Generating your product blueprint..."):
+            blueprint_response = jamai.table.add_table_rows(
+                "action",
+                p.RowAddRequest(
+                    table_id="action-product-blueprint",
+                    data=[{
+                        "title": product_title,
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "blueprint_prompt": blueprint_prompt
+                    }],
+                    stream=True,
+                ),
+            )
+
+            blueprint_output = "".join(chunk.text for chunk in blueprint_response if hasattr(chunk, "text"))
+
+        st.subheader("🧱 Product Blueprint")
+        st.markdown(blueprint_output)
+        st.download_button("📥 Download Blueprint", blueprint_output, file_name="product_blueprint.txt", mime="text/plain")
+
+    elif blueprint_submitted:
+        st.warning("❗ Please fill in all required fields to generate a blueprint.")
+
+    st.divider()
+    st.subheader("📐 Product Blueprint History")
+
+    try:
+        rows = jamai.table.list_table_rows("action", "action-product-blueprint")
+        if not rows.items:
+            st.info("No product blueprints generated yet.")
+        else:
+            sorted_rows = sorted(rows.items, key=lambda r: r.get("timestamp", {}).get("value", ""), reverse=True)
+            for row in sorted_rows:
+                product_title = row.get("title", {}).get("value", "Untitled")
+                timestamp = row.get("timestamp", {}).get("value", "")
+                blueprint = row.get("product_blueprint", {}).get("value", "")
+                row_id = row.get("ID")
+
+                with st.expander(f"🧠 {product_title} — {timestamp}"):
+                    st.markdown(blueprint or "_No blueprint found._")
+                    if st.button(f"❌ Delete this blueprint", key=f"delete_blueprint_{row_id}"):
+                        jamai.table.delete_table_rows(
+                            "action",
+                            p.RowDeleteRequest(
+                                table_id="action-product-blueprint",
+                                row_ids=[row_id]
+                            )
+                        )
+                        st.success("✅ Deleted blueprint.")
+                        st.rerun()
+    except Exception as e:
+        st.warning(f"⚠️ Failed to load blueprint history: {e}")
+
+with tab2:
     st.header("Upload Your Files")
 
     # Limits
@@ -500,7 +641,7 @@ with tab1:
     except Exception as e:
         st.warning(f"⚠️ Failed to load knowledge uploads: {e}")
 
-with tab2:
+with tab3:
     st.header("Generate Outlines or Full Guides")
     st.subheader("Account Access")
     user_tier = st.radio("Select your plan:", ("Free / Starter", "Pro / Paid"), index=0, key="user_tier")
@@ -518,17 +659,32 @@ with tab2:
         with st.spinner("🧠 Generating Outline..."):
             completion = jamai.table.add_table_rows("action", p.RowAddRequest(table_id="action-outline-generator", data=[{"user_instruction": user_topic}], stream=True))
             st.session_state.outline = "".join(chunk.text for chunk in completion if hasattr(chunk, "text"))
+            log_outline_or_guide(user_topic, st.session_state.outline, is_guide=False)
+
     if guide_submitted and user_topic:
         if user_tier == "Pro / Paid":
             st.session_state.user_topic = user_topic
             with st.spinner("📚 Writing Full Guide..."):
                 completion = jamai.table.add_table_rows("action", p.RowAddRequest(table_id="action-full-guide-generator", data=[{"user_instruction": user_topic}], stream=True))
                 st.session_state.guide = "".join(chunk.text for chunk in completion if hasattr(chunk, "text"))
+                log_outline_or_guide(user_topic, st.session_state.guide, is_guide=True)
+
         else:
             st.warning("🚀 Upgrade to Pro to generate full guides!")
     if "outline" in st.session_state:
         st.subheader("📝 Generated Outline")
-        st.markdown(st.session_state.outline)
+
+        formatted_outline = st.session_state.outline.strip()
+
+        st.markdown(formatted_outline)
+
+        st.download_button(
+            label="📥 Download as Text",
+            data=formatted_outline,
+            file_name="outline.txt",
+            mime="text/plain"
+        )
+
         if st.session_state.notion_api_key and st.session_state.notion_parent_page_id:
             if st.button("📤 Upload Outline to Notion"):
                 success = create_notion_page(st.session_state.notion_api_key, st.session_state.notion_parent_page_id, f"Outline - {st.session_state.user_topic}", st.session_state.outline)
@@ -538,7 +694,18 @@ with tab2:
                     st.error("❌ Failed to upload to Notion.")
     if "guide" in st.session_state:
         st.subheader("📚 Full Digital Product Guide")
-        st.markdown(st.session_state.guide)
+
+        formatted_guide = st.session_state.guide.strip()
+
+        st.markdown(formatted_guide)
+
+        st.download_button(
+            label="📥 Download Full Guide as Text",
+            data=formatted_guide,
+            file_name="full_guide.txt",
+            mime="text/plain"
+        )
+
         if st.session_state.notion_api_key and st.session_state.notion_parent_page_id:
             if st.button("📤 Upload Full Guide to Notion"):
                 success = create_notion_page(st.session_state.notion_api_key, st.session_state.notion_parent_page_id, f"Full Guide - {st.session_state.user_topic}", st.session_state.guide)
@@ -570,8 +737,7 @@ with tab2:
 
     st.divider()
     display_outline_and_guide_history()
-
-with tab3:
+with tab4:
     st.header("Connect Your Notion")
     st.markdown("""
     ### How to Connect
@@ -596,7 +762,7 @@ with tab3:
         save_connection_to_file(api_key, st.session_state.notion_parent_page_id)
         st.success("✅ Notion connection saved!")
 
-with tab4:
+with tab5:
     st.header("🎬 Remix an Existing Video")
 
     REMIX_LIMIT = 10

@@ -159,6 +159,43 @@ The tone should be fun, practical, and performance-oriented.
         )
     ), "action", "action-remix-history")
 
+    recreate_table(lambda: jamai.table.create_action_table(
+        p.ActionTableSchemaCreate(
+            id="action-product-blueprint",
+            cols=[
+                p.ColumnSchemaCreate(id="title", dtype="str"),  # 🔹 New: for display
+                p.ColumnSchemaCreate(id="timestamp", dtype="str"),  # 🔹 New: human-readable time
+                p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
+                p.ColumnSchemaCreate(
+                    id="product_blueprint", dtype="str",
+                    gen_config=p.LLMGenConfig(
+                        system_prompt="You're a digital product strategist who helps creators build, name, and position their online offers.",
+                        prompt="""
+You are a digital product strategist helping creators build online products.
+
+The user wants to build a product on:
+"${user_instruction}"
+
+Please generate:
+- A benefit-driven product title
+- The big promise (what transformation does it deliver?)
+- Delivery method (course, ebook, template bundle, etc.)
+- A one-sentence core transformation
+- A persuasive 1-paragraph sales pitch
+- 3–5 sales bullet points
+
+Keep it clear, modern, and value-focused.
+""",
+                        temperature=0.4,
+                        top_p=0.95,
+                        max_tokens=1500,
+                    )
+                ),
+            ]
+        )
+    ), "action", "action-product-blueprint")
+
+
 if __name__ == "__main__":
     create_tables()
     print("✅ All tables created and up to date!")
