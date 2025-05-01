@@ -7,3 +7,4 @@ openai-whisper
 opencv-python
 pytesseract
 yt-dlp
+streamlit-authenticator
