@@ -18,6 +18,8 @@ import yt_dlp
 from urllib.parse import urlparse
 from auth_app import authenticate_user
 
+st.set_page_config(page_title="Digital Product Creator", layout="wide")
+
 # Load environment variables
 load_dotenv()
 
@@ -31,7 +33,6 @@ jamai = JamAI(
 name, email, paid_status, authenticated = authenticate_user()
 is_paid_user = paid_status
 
-st.set_page_config(page_title="Digital Product Creator", layout="wide")
 st.title("Digital Product Creator - Audio to Guide")
 
 if "audio_upload_count" not in st.session_state:
