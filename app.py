@@ -32,6 +32,10 @@ jamai = JamAI(
 # Authenticate user first
 name, email, paid_status, authenticated = authenticate_user()
 is_paid_user = paid_status
+if not authenticated:
+    st.warning("🔐 Please log in to continue.")
+    st.stop()
+
 
 st.title("Digital Product Creator - Audio to Guide")
 
