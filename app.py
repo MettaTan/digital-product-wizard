@@ -16,28 +16,59 @@ import pytesseract
 from collections import Counter
 import yt_dlp
 from urllib.parse import urlparse
-from auth_app import authenticate_user
+from auth_app import authenticator, credentials, users
 
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
-# Load environment variables
-load_dotenv()
+# Initialize session state for authentication if not present
+if "authentication_status" not in st.session_state:
+    st.session_state["authentication_status"] = None
+if "name" not in st.session_state:
+    st.session_state["name"] = None
+if "username" not in st.session_state:
+    st.session_state["username"] = None
 
-# Initialize JamAI client
-jamai = JamAI(
-    project_id=os.getenv("JAMAI_PROJECT_ID"),
-    token=os.getenv("JAMAI_API_KEY")
-)
+# Try to use the login widget if not authenticated
+if not st.session_state["authentication_status"]:
+    # Call the authenticator login method with the correct parameters
+    # The key parameter is what you were using as the first parameter
+    login_result = authenticator.login(location="main", key="Login")
+    
+    # According to docs, this returns None when location is not 'unrendered'
+    # The authentication status is stored in session_state instead
+    if st.session_state["authentication_status"]:
+        # Successful login
+        name = st.session_state["name"]
+        username = st.session_state["username"]
+    elif st.session_state["authentication_status"] is False:
+        st.error("❌ Incorrect username or password.")
+        st.stop()
+    else:
+        st.warning("🔐 Please log in to continue.")
+        st.stop()
 
-# Authenticate user first
-name, email, paid_status, authenticated = authenticate_user()
-is_paid_user = paid_status
-if not authenticated:
-    st.warning("🔐 Please log in to continue.")
-    st.stop()
+# If code reaches here, user is authenticated
+username = st.session_state["username"]
+name = st.session_state["name"]
 
+# Extract email & paid status
+email = credentials["usernames"][username]["email"]
+is_paid_user = users[email]["paid"]
 
+# Optional logout button
+if authenticator.logout("Logout", "sidebar"):
+    st.session_state["authentication_status"] = None
+    st.session_state["name"] = None
+    st.session_state["username"] = None
+    st.experimental_rerun()
+
+# Main app content
 st.title("Digital Product Creator - Audio to Guide")
+st.success(f"Welcome {name}! Your paid status: {'Premium' if is_paid_user else 'Free'}")
+
+# Rest of your application...
+
+# Rest of your application...
 
 if "audio_upload_count" not in st.session_state:
     st.session_state.audio_upload_count = 0
