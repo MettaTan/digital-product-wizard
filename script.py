@@ -166,6 +166,7 @@ The tone should be fun, practical, and performance-oriented.
                 p.ColumnSchemaCreate(id="title", dtype="str"),  # 🔹 New: for display
                 p.ColumnSchemaCreate(id="timestamp", dtype="str"),  # 🔹 New: human-readable time
                 p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
+                p.ColumnSchemaCreate(id="delivery_method", dtype="str"),
                 p.ColumnSchemaCreate(
                     id="product_blueprint", dtype="str",
                     gen_config=p.LLMGenConfig(
@@ -175,6 +176,8 @@ You are a digital product strategist helping creators build online products.
 
 The user wants to build a product on:
 "${user_instruction}"
+
+Delivery Method: ${delivery_method}
 
 Please generate:
 - A benefit-driven product title

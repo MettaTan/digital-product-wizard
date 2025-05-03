@@ -18,6 +18,15 @@ import yt_dlp
 from urllib.parse import urlparse
 from auth_app import authenticator, credentials, users
 
+# Load environment variables
+load_dotenv()
+
+# ✅ Must come before calling any JamAI functions
+jamai = JamAI(
+    project_id=os.getenv("JAMAI_PROJECT_ID"),
+    token=os.getenv("JAMAI_API_KEY")
+)
+
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
 # Initialize session state for authentication if not present
@@ -533,7 +542,8 @@ Include:
                     data=[{
                         "title": product_title,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "blueprint_prompt": blueprint_prompt
+                        "user_instruction": product_title,
+                        "delivery_method": delivery_method
                     }],
                     stream=True,
                 ),
