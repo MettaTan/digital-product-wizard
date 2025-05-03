@@ -19,7 +19,7 @@ credentials = {
             "email": emails[i],
             "password": hashed_passwords[i],
         } for i in range(len(usernames))
-    }``
+    }
 }
 
 # Paid status separated
