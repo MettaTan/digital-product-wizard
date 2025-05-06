@@ -23,19 +23,20 @@ def transcribe_audio_whisper(audio_path):
     return transcript.text
 
 
-def upload_transcription_to_knowledge(transcription_text: str, title: str):
-    response = client.table.add_table_rows(
+def upload_transcription_to_knowledge(transcription_text: str, title: str, blueprint: str = None):
+    row = {
+        "Title": title,
+        "Text": transcription_text,
+        "Source": title,
+    }
+    if blueprint:
+        row["Linked Blueprint"] = blueprint  # ✅ must go here
+
+    client.table.add_table_rows(
         "knowledge",
         p.RowAddRequest(
             table_id="knowledge-digital-products",
-            data=[
-                {
-                    "Title": title,
-                    "Text": transcription_text,
-                    "Source": title
-                }
-            ],
-            stream=False,
+            data=[row],
+            stream=False
         )
     )
-    return True

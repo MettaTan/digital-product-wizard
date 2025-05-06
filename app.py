@@ -89,7 +89,7 @@ if "remix_upload_count" not in st.session_state:
     st.session_state.remix_upload_count = 0
 
 CONNECTION_FILE = ".notion_connection.json"
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Product Blueprint", "Upload + Transcribe", "Create Outlines / Guides", "Connect to Notion", "Remix Existing Video"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Product Blueprint", "Upload + Transcribe", "Create Outlines / Guides", "Connect to Notion", "Remix Existing Video", "Course Launch Kit"])
 
 def download_video_from_url(url, output_path="downloaded_video.mp4"):
     """
@@ -124,9 +124,24 @@ def shorten_url(url):
     except:
         return url
     
-def clean_remix_text(text):
-    # Remove leading markdown headers like ### or ##
-    return re.sub(r"^#+\s*", "", text.strip())
+def clean_generated_markdown(text):
+    """
+    Cleans LLM-generated markdown to render nicely in Streamlit without formatting artifacts.
+    """
+    if not text:
+        return ""
+    text = re.sub(r'(\*{1,3})(.*?)\1', r'\2', text)             # *bold* and **bold**
+    text = re.sub(r'_([^_]+)_', r'\1', text)                    # _italic_
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # markdown headers
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)       # blockquotes
+    text = re.sub(r'^[-*]\s+', '', text, flags=re.MULTILINE)    # unordered lists
+    text = re.sub(r'`([^`]*)`', r'\1', text)                    # inline code
+    text = text.replace("*", "").replace("_", "")
+    return text.strip()
+
+def fix_token_spacing(text):
+    # Inserts spaces between letters and numbers that were jammed together
+    return re.sub(r'(?<=[a-zA-Z])(?=\d)|(?<=\d)(?=[a-zA-Z])', ' ', text)
 
 # Whisper Transcription + Filter
 def transcribe_video_audio(video_path):
@@ -261,6 +276,8 @@ def generate_video_scripts(guide_text):
     previous_script_summary = ""
 
     for i, lesson in enumerate(lessons):
+        next_lesson = lessons[i + 1] if i + 1 < len(lessons) else None
+
         # Add summary to context for next lesson
         context = f"Previous Summary: {previous_script_summary}\n\n" if previous_script_summary else ""
 
@@ -269,6 +286,7 @@ You are a YouTube educator and expert course scriptwriter. Write a detailed, hig
 "{lesson}"
 
 {context}This lesson is part of a larger video course. Do NOT repeat intros. Avoid clichés like “Alright, listen up” or “Let’s dive in.”
+
 Each script should feel like a continuation — not a restart.
 
 Include:
@@ -277,8 +295,11 @@ Include:
 - Examples, analogies, or frameworks
 - A motivating takeaway at the end
 
+Conclude with a smooth preview of the next lesson:
+"{next_lesson}"{'' if next_lesson else ' (This is the final module.)'}
+
 Use second-person voice (“you”) to speak directly to the viewer. No fluff.
-        """
+"""
 
         completion = jamai.table.add_table_rows(
             "action",
@@ -359,9 +380,9 @@ def display_remix_history():
         for row in rows.items:
             video_url = row.get("video_link", {}).get("value", "")
             video_caption = row.get("video_caption", {}).get("value", "")
-            remix_1 = clean_remix_text(row.get("remix_1", {}).get("value", ""))
-            remix_2 = clean_remix_text(row.get("remix_2", {}).get("value", ""))
-            remix_3 = clean_remix_text(row.get("remix_3", {}).get("value", ""))
+            remix_1 = clean_generated_markdown(row.get("remix_1", {}).get("value", ""))
+            remix_2 = clean_generated_markdown(row.get("remix_2", {}).get("value", ""))
+            remix_3 = clean_generated_markdown(row.get("remix_3", {}).get("value", ""))
             row_id = row.get("ID")
 
             label = (
@@ -490,6 +511,53 @@ def display_product_blueprint_history():
     except Exception as e:
         st.warning(f"⚠️ Failed to load blueprint history: {e}")
 
+
+def display_course_assets_history():
+    st.subheader("📜 Past Course Launch Kits")
+    try:
+        rows = jamai.table.list_table_rows("action", "action-course-assets-history")
+        if not rows.items:
+            st.info("No previous asset bundles yet.")
+            return
+        for row in rows.items:
+            title = row.get("title", {}).get("value", "Untitled")
+            timestamp = row.get("timestamp", {}).get("value", "")
+            with st.expander(f"📘 {title} — {timestamp}"):
+                for key in ["slides", "workbook", "emails", "checklist", "discord"]:
+                    content = row.get(key, {}).get("value", "")
+                    if content:
+                        st.markdown(f"### {key.capitalize()}")
+                        st.markdown(content)
+                if st.button("❌ Delete", key=f"delete_{row['ID']}"):
+                    jamai.table.delete_table_rows(
+                        "action",
+                        p.RowDeleteRequest(
+                            table_id="action-course-assets-history",
+                            row_ids=[row["ID"]]
+                        )
+                    )
+                    st.success("✅ Deleted asset bundle.")
+                    st.rerun()
+    except Exception as e:
+        st.warning(f"⚠️ Failed to load asset history: {e}")
+
+def fix_token_spacing(text):
+    return re.sub(r'(?<=[a-zA-Z])(?=\d)|(?<=\d)(?=[a-zA-Z])', ' ', text)
+
+def clean_generated_markdown(text):
+    if not text:
+        return ""
+    text = re.sub(r'(?<=[a-zA-Z])(?=\d)|(?<=\d)(?=[a-zA-Z])', ' ', text)
+    text = re.sub(r'(\*{3})(.*?)\1', r'<b><i>\2</i></b>', text)
+    text = re.sub(r'(\*{2})(.*?)\1', r'<b>\2</b>', text)
+    text = re.sub(r'(?<!\w)\*(\w.*?)\*(?!\w)', r'<i>\1</i>', text)
+    text = re.sub(r'_(.*?)_', r'<i>\1</i>', text)
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    text = re.sub(r'^#{1,6}\s+(.*)', r'<b>\1</b>', text, flags=re.MULTILINE)
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
+    return text.strip()
+        
 if "notion_api_key" not in st.session_state or "notion_parent_page_id" not in st.session_state:
     api_key, parent_page_id = load_connection_from_file()
     st.session_state.notion_api_key = api_key
@@ -518,22 +586,6 @@ with tab1:
         blueprint_submitted = st.form_submit_button("🧠 Generate Product Blueprint")
 
     if blueprint_submitted and target_audience and transformation and product_title:
-        blueprint_prompt = f"""
-You're an elite digital product strategist. Based on the following inputs, create a concise product blueprint that defines the offer and pitch for a profitable digital product.
-
-Target Audience: {target_audience}
-Big Promise / Outcome: {transformation}
-Delivery Method: {delivery_method}
-Product Title: {product_title}
-Optional Pitch: {product_pitch}
-
-Include:
-- Product Subtitle or Tagline
-- Core Transformation (One Sentence)
-- 3–5 Sales Bullet Points
-- 1–2 Positioning Notes (what makes it unique or timely)
-"""
-
         with st.spinner("🎨 Generating your product blueprint..."):
             blueprint_response = jamai.table.add_table_rows(
                 "action",
@@ -543,17 +595,26 @@ Include:
                         "title": product_title,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "user_instruction": product_title,
-                        "delivery_method": delivery_method
+                        "delivery_method": delivery_method,
+                        "audience": target_audience,
+                        "promise": transformation,
+                        "pitch": product_pitch,
+                        # ⛔️ Do NOT include "product_blueprint" manually!
                     }],
                     stream=True,
                 ),
             )
 
-            blueprint_output = "".join(chunk.text for chunk in blueprint_response if hasattr(chunk, "text"))
+            # Display a cleaned version (not saved)
+            raw_output = "".join(chunk.text for chunk in blueprint_response if hasattr(chunk, "text"))
+            fixed = fix_token_spacing(raw_output)
+            cleaned = clean_generated_markdown(fixed)
 
         st.subheader("🧱 Product Blueprint")
-        st.markdown(blueprint_output)
-        st.download_button("📥 Download Blueprint", blueprint_output, file_name="product_blueprint.txt", mime="text/plain")
+        st.markdown(cleaned, unsafe_allow_html=True)
+
+        safe_title = re.sub(r'\W+', '_', product_title.lower())[:50]
+        st.download_button("📥 Download Blueprint", cleaned, file_name=f"blueprint_{safe_title}.txt", mime="text/plain")
 
     elif blueprint_submitted:
         st.warning("❗ Please fill in all required fields to generate a blueprint.")
@@ -563,10 +624,12 @@ Include:
 
     try:
         rows = jamai.table.list_table_rows("action", "action-product-blueprint")
-        if not rows.items:
+        rows = [r for r in rows.items if r.get("title", {}).get("value")]
+        sorted_rows = sorted(rows, key=lambda r: r.get("timestamp", {}).get("value") or "", reverse=True)
+
+        if not sorted_rows:
             st.info("No product blueprints generated yet.")
         else:
-            sorted_rows = sorted(rows.items, key=lambda r: r.get("timestamp", {}).get("value", ""), reverse=True)
             for row in sorted_rows:
                 product_title = row.get("title", {}).get("value", "Untitled")
                 timestamp = row.get("timestamp", {}).get("value", "")
@@ -574,7 +637,7 @@ Include:
                 row_id = row.get("ID")
 
                 with st.expander(f"🧠 {product_title} — {timestamp}"):
-                    st.markdown(blueprint or "_No blueprint found._")
+                    st.markdown(blueprint or "_No blueprint found._", unsafe_allow_html=True)
                     if st.button(f"❌ Delete this blueprint", key=f"delete_blueprint_{row_id}"):
                         jamai.table.delete_table_rows(
                             "action",
@@ -587,6 +650,7 @@ Include:
                         st.rerun()
     except Exception as e:
         st.warning(f"⚠️ Failed to load blueprint history: {e}")
+
 
 with tab2:
     st.header("Upload Your Files")
@@ -621,6 +685,20 @@ with tab2:
     # --- Button conditions
     process_disabled = (not audio_files and not pdf_files)
 
+    # Load product blueprints so we can attach a "source"
+    try:
+        blueprint_rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        if not blueprint_rows:
+            st.warning("❗ No product blueprints found. Please create one in Tab 1 first.")
+            st.stop()
+
+        blueprint_options = {row["title"]["value"]: row.get("title", {}).get("value") for row in blueprint_rows if "title" in row and row.get("title", {}).get("value")}
+        selected_blueprint = st.selectbox("📌 Link uploads to a product blueprint:", list(blueprint_options.values()))
+    except Exception as e:
+        st.error(f"❌ Failed to load product blueprints: {e}")
+        selected_blueprint = None
+
+
     if (audio_files or pdf_files) and st.button("▶️ Start Processing Uploaded Files", disabled=process_disabled):
         st.info("🚀 Starting upload and embedding...")
         total_files = len(audio_files) + len(pdf_files)
@@ -631,7 +709,7 @@ with tab2:
             with open("temp_audio.wav", "wb") as f:
                 f.write(audio.read())
             transcription = transcribe_audio_whisper("temp_audio.wav")
-            upload_transcription_to_knowledge(transcription, title=audio.name)
+            upload_transcription_to_knowledge(transcription, title=audio.name, blueprint=selected_blueprint)
             clean_temp_files()
             current_step += 1
             st.session_state.audio_upload_count += 1  # ✅ Increment
@@ -641,6 +719,23 @@ with tab2:
             with open("temp.pdf", "wb") as f:
                 f.write(pdf.read())
             jamai.table.embed_file("temp.pdf", "knowledge-digital-products")
+
+            # Manually insert the additional metadata field
+            if selected_blueprint:
+                jamai.table.add_table_rows(
+                    "knowledge",
+                    p.RowAddRequest(
+                        table_id="knowledge-digital-products",
+                        data=[{
+                            "Title": pdf.name,
+                            "Text": "",  # optional placeholder
+                            "Source": pdf.name,
+                            "Linked Blueprint": selected_blueprint
+                        }],
+                        stream=False
+                    )
+                )
+
             clean_temp_files()
             current_step += 1
             st.session_state.pdf_upload_count += 1  # ✅ Increment
@@ -689,34 +784,73 @@ with tab2:
 
 with tab3:
     st.header("Generate Outlines or Full Guides")
-    st.subheader("Account Access")
-    user_tier = st.radio("Select your plan:", ("Free / Starter", "Pro / Paid"), index=0, key="user_tier")
     st.divider()
-    st.subheader("Step 1: Enter Your Guide Topic")
+    st.subheader("Step 1: Select a Product Blueprint")
+
+    try:
+        rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        if not rows:
+            st.warning("❗ Please create a product blueprint first in Tab 1.")
+            st.stop()
+
+        options = {row["title"]["value"]: row for row in rows if "title" in row and row.get("title", {}).get("value")}
+        selected_title = st.selectbox("Pick a blueprint to use:", list(options.keys()))
+        selected_row = options[selected_title]
+
+        # Pre-fill all values
+        user_topic = selected_row["title"]["value"]
+        audience = selected_row.get("audience", {}).get("value", "")
+        promise = selected_row.get("promise", {}).get("value", "")
+        delivery = selected_row.get("delivery_method", {}).get("value", "")
+        pitch = selected_row.get("pitch", {}).get("value", "")
+
+    except Exception as e:
+        st.error(f"Failed to load product blueprints: {e}")
+        st.stop()
+
     with st.form("generation_form"):
-        user_topic = st.text_input("Enter your topic or idea (e.g., 'Starting a fitness coaching business'):")
+        st.markdown(f"**Selected Topic:** `{user_topic}`")
         col1, col2 = st.columns(2)
         with col1:
             outline_submitted = st.form_submit_button("📝 Generate Outline Only")
         with col2:
             guide_submitted = st.form_submit_button("📚 Generate Full Guide (Pro Only)")
+
     if outline_submitted and user_topic:
         st.session_state.user_topic = user_topic
+
         with st.spinner("🧠 Generating Outline..."):
-            completion = jamai.table.add_table_rows("action", p.RowAddRequest(table_id="action-outline-generator", data=[{"user_instruction": user_topic}], stream=True))
+            completion = jamai.table.add_table_rows(
+                "action",
+                p.RowAddRequest(
+                    table_id="action-outline-generator",
+                    data=[{
+                        "user_instruction": user_topic,
+                        "audience": audience,
+                        "promise": promise,
+                        "delivery": delivery,
+                        "pitch": pitch,
+                    }],
+                    stream=True,
+                )
+            )
             st.session_state.outline = "".join(chunk.text for chunk in completion if hasattr(chunk, "text"))
             log_outline_or_guide(user_topic, st.session_state.outline, is_guide=False)
 
     if guide_submitted and user_topic:
-        if user_tier == "Pro / Paid":
+        if is_paid_user:
             st.session_state.user_topic = user_topic
             with st.spinner("📚 Writing Full Guide..."):
-                completion = jamai.table.add_table_rows("action", p.RowAddRequest(table_id="action-full-guide-generator", data=[{"user_instruction": user_topic}], stream=True))
+                completion = jamai.table.add_table_rows("action", p.RowAddRequest(
+                    table_id="action-full-guide-generator",
+                    data=[{"user_instruction": user_topic}],
+                    stream=True
+                ))
                 st.session_state.guide = "".join(chunk.text for chunk in completion if hasattr(chunk, "text"))
                 log_outline_or_guide(user_topic, st.session_state.guide, is_guide=True)
-
         else:
             st.warning("🚀 Upgrade to Pro to generate full guides!")
+
     if "outline" in st.session_state:
         st.subheader("📝 Generated Outline")
 
@@ -850,6 +984,7 @@ with tab5:
         video_path = "temp_video.mp4"
         st.success("✅ Video uploaded!")
 
+    caption = caption if video_url else "Uploaded file"
 
     # Process the video once available
     if video_path:
@@ -918,3 +1053,115 @@ Be creative, but follow the balance strictly.
 
     st.divider()
     display_remix_history()
+
+with tab6:
+    st.header("📦 Course Launch Kit Generator")
+
+    try:
+        # Load product blueprints
+        rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        if not rows:
+            st.warning("❗ Please create a product blueprint first.")
+            st.stop()
+
+        options = {row["title"]["value"]: row for row in rows if "title" in row and row.get("title", {}).get("value")}
+        selected_title = st.selectbox("Pick a product blueprint:", list(options.keys()))
+        selected_row = options[selected_title]
+
+        # Extract values
+        title = selected_row["title"]["value"]
+        audience = selected_row.get("audience", {}).get("value", "")
+        promise = selected_row.get("promise", {}).get("value", "")
+        delivery = selected_row.get("delivery_method", {}).get("value", "")
+        pitch = selected_row.get("pitch", {}).get("value", "")
+    except Exception as e:
+        st.error(f"❌ Failed to load blueprints: {e}")
+        st.stop()
+
+    # Generate assets on click
+    if st.button("🚀 Generate All Course Assets"):
+        with st.spinner("Generating slides, workbook, emails, and more..."):
+            asset_prompts = [
+                ("Slides", f"""
+For a course titled '{title}' for an audience of {audience}, generate 3 teaching slide titles and 2–3 bullet points for each module in the course.
+
+Each module should include:
+- Slide titles
+- Bullet points under each
+Use a teaching tone suitable for a video course.
+"""),
+                ("Workbook", f"""
+Create one practical workbook exercise per module for a course called '{title}'.
+
+Each exercise should:
+- Reinforce that module's learning
+- Be actionable
+- Be student-friendly (no jargon)
+
+List as:
+Module Title → Exercise → Instructions
+"""),
+                ("Email Launch Sequence", f"""
+Generate a 4-part email sequence to launch a digital product titled '{title}' for {audience}.
+
+Tone: professional, clear, value-driven.
+
+Each email should have:
+- Subject line
+- Body content (~150–200 words)
+
+Focus on benefits, objections, and motivating action.
+"""),
+                ("Launch Checklist", f"""
+Write a digital course launch checklist.
+
+Split into:
+- Pre-Launch
+- Launch Week
+- Post-Launch
+
+Include items like email setup, social media content, Discord prep, etc.
+"""),
+                ("Discord Welcome Message", f"""
+Write a welcome message for a private Discord for a course titled '{title}'.
+
+Include:
+- Friendly welcome
+- Course access tips
+- Rules
+- Support instructions
+""")
+            ]
+
+            generated_assets = {}
+
+            for label, prompt in asset_prompts:
+                try:
+                    response = jamai.table.add_table_rows(
+                        "action",
+                        p.RowAddRequest(
+                            table_id="action-course-assets-generator",
+                            data=[{"prompt": prompt}],
+                            stream=True
+                        )
+                    )
+                    full_text = "".join(chunk.text for chunk in response if hasattr(chunk, "text"))
+                    generated_assets[label] = full_text.strip()
+                except Exception as e:
+                    st.warning(f"⚠️ Failed to generate {label}: {e}")
+
+            st.session_state.course_assets = generated_assets
+            st.success("✅ Assets generated!")
+
+    # Display + Download
+    if "course_assets" in st.session_state:
+        st.subheader("📂 Course Assets Preview")
+        for section, content in st.session_state.course_assets.items():
+            with st.expander(f"📘 {section}"):
+                st.markdown(content)
+
+        full_export = "\n\n".join([f"## {k}\n\n{v}" for k, v in st.session_state.course_assets.items()])
+        st.download_button("📄 Download All as Text", full_export, file_name="course_assets.txt", mime="text/plain")
+
+    st.divider()
+    display_course_assets_history()

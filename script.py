@@ -24,21 +24,37 @@ def create_tables():
             id="knowledge-digital-products",
             cols=[
                 p.ColumnSchemaCreate(id="Source", dtype="str"),
+                p.ColumnSchemaCreate(id="Linked Blueprint", dtype="str"),  # ✅ Add this line
             ],
             embedding_model="ellm/BAAI/bge-m3",
         )
     ), "knowledge", "knowledge-digital-products")
+
 
     recreate_table(lambda: jamai.table.create_action_table(
         p.ActionTableSchemaCreate(
             id="action-outline-generator",
             cols=[
                 p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
+                p.ColumnSchemaCreate(id="audience", dtype="str"),
+                p.ColumnSchemaCreate(id="promise", dtype="str"),
+                p.ColumnSchemaCreate(id="delivery", dtype="str"),
+                p.ColumnSchemaCreate(id="pitch", dtype="str"),
                 p.ColumnSchemaCreate(
                     id="outline", dtype="str",
                     gen_config=p.LLMGenConfig(
                         system_prompt="You are an expert course creator. Generate a clear, structured outline for a new digital product based on the user's instruction and related knowledge.",
-                        prompt="Create a detailed outline for: ${user_instruction}",
+                        prompt="""
+You're an expert digital product designer. Based on the following product idea, generate a clear, structured course outline.
+
+Product Title: ${user_instruction}
+Target Audience: ${audience}
+Big Promise: ${promise}
+Delivery Method: ${delivery}
+Optional Pitch: ${pitch}
+
+Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and format the output with clear headings and bullet points.
+""",
                         rag_params=p.RAGParams(table_id="knowledge-digital-products", k=10),
                         temperature=0.2,
                         top_p=0.95,
@@ -68,6 +84,18 @@ def create_tables():
             ]
         )
     ), "action", "action-full-guide-generator")
+
+    recreate_table(lambda: jamai.table.create_action_table(
+        p.ActionTableSchemaCreate(
+            id="action-outline-guide-history",
+            cols=[
+                p.ColumnSchemaCreate(id="user_input", dtype="str"),
+                p.ColumnSchemaCreate(id="type", dtype="str"),  # "outline" or "guide"
+                p.ColumnSchemaCreate(id="content", dtype="str"),
+                p.ColumnSchemaCreate(id="timestamp", dtype="str"),
+            ]
+        )
+    ), "action", "action-outline-guide-history")
 
     recreate_table(lambda: jamai.table.create_action_table(
         p.ActionTableSchemaCreate(
@@ -172,6 +200,8 @@ The tone should be fun, practical, and performance-oriented.
                     gen_config=p.LLMGenConfig(
                         system_prompt="You're a digital product strategist who helps creators build, name, and position their online offers.",
                         prompt="""
+
+    
 You are a digital product strategist helping creators build online products.
 
 The user wants to build a product on:
@@ -197,6 +227,39 @@ Keep it clear, modern, and value-focused.
             ]
         )
     ), "action", "action-product-blueprint")
+
+    recreate_table(lambda: jamai.table.create_action_table(
+        p.ActionTableSchemaCreate(
+            id="action-course-assets-generator",
+            cols=[
+                p.ColumnSchemaCreate(id="prompt", dtype="str"),
+                p.ColumnSchemaCreate(
+                    id="output", dtype="str",
+                    gen_config=p.LLMGenConfig(
+                        system_prompt="You're a professional course creation strategist. You help creators generate teaching assets and marketing material for digital products.",
+                        prompt="${prompt}",
+                        temperature=0.4,
+                        top_p=0.95,
+                        max_tokens=3000,
+                    )
+                )
+            ]
+        )
+    ), "action", "action-course-assets-generator")
+    recreate_table(lambda: jamai.table.create_action_table(
+        p.ActionTableSchemaCreate(
+            id="action-course-assets-history",
+            cols=[
+                p.ColumnSchemaCreate(id="title", dtype="str"),
+                p.ColumnSchemaCreate(id="timestamp", dtype="str"),
+                p.ColumnSchemaCreate(id="slides", dtype="str"),
+                p.ColumnSchemaCreate(id="workbook", dtype="str"),
+                p.ColumnSchemaCreate(id="emails", dtype="str"),
+                p.ColumnSchemaCreate(id="checklist", dtype="str"),
+                p.ColumnSchemaCreate(id="discord", dtype="str"),
+            ]
+        )
+    ), "action", "action-course-assets-history")
 
 
 if __name__ == "__main__":
