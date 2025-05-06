@@ -11,7 +11,7 @@ PAT = os.getenv("JAMAI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = JamAI(project_id=PROJECT_ID, token=PAT)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY, timeout=120)
 
 
 def transcribe_audio_whisper(audio_path):

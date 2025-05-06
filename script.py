@@ -43,6 +43,7 @@ def create_tables():
                 p.ColumnSchemaCreate(
                     id="outline", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You are an expert course creator. Generate a clear, structured outline for a new digital product based on the user's instruction and related knowledge.",
                         prompt="""
 You're an expert digital product designer. Based on the following product idea, generate a clear, structured course outline.
@@ -73,6 +74,7 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
                 p.ColumnSchemaCreate(
                     id="guide", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You are a professional ghostwriter. Write a long, motivational, structured full guide for a digital product based on the user's instruction and related documents.",
                         prompt="Create a full guide titled '${user_instruction}' using all available source documents. Format it with clear numbered modules (e.g. Module I, Module II, etc) and detailed sections.",
                         rag_params=p.RAGParams(table_id="knowledge-digital-products", k=20),
@@ -105,6 +107,7 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
                 p.ColumnSchemaCreate(
                     id="video_script", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You're a professional course presenter and curriculum designer.\n\nWrite a 2–3 minute video script for a course lesson titled \"${lesson_topic}\". This is part of a larger video series — each module should build upon the previous one, not repeat the same hook or opening.\n\nAvoid generic intros like “You're interested in...” or “Let’s dive into…” — make each lesson feel fresh and connected to the journey.\n\nInclude:\n- A unique, engaging hook that references previous content if applicable.\n- Clear and conversational explanation of the lesson topic.\n- Optional visual cues for the presenter (e.g. [On screen:], [Cut to:]).\n\nSpeak directly to the viewer using “you” and “we”. Make it motivating and practical, like a mentor teaching on camera.\n\nAvoid repeating structure or wording from earlier modules. End the script naturally on a full sentence if approaching the token limit.",
                         prompt="""
                         You are a professional course presenter and curriculum designer.
@@ -152,6 +155,7 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
                 p.ColumnSchemaCreate(
                     id="remix_ideas", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You’re a viral short-form content strategist. Your job is to take existing video content and generate new, high-performing variations for Instagram Reels and TikTok.",
                         prompt="""
 Analyze the following video and generate 3 creative remix ideas for short-form platforms (Reels, TikTok):
@@ -198,6 +202,7 @@ The tone should be fun, practical, and performance-oriented.
                 p.ColumnSchemaCreate(
                     id="product_blueprint", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You're a digital product strategist who helps creators build, name, and position their online offers.",
                         prompt="""
 
@@ -236,6 +241,7 @@ Keep it clear, modern, and value-focused.
                 p.ColumnSchemaCreate(
                     id="output", dtype="str",
                     gen_config=p.LLMGenConfig(
+                        model="ellm/openai/gpt-3.5-turbo",
                         system_prompt="You're a professional course creation strategist. You help creators generate teaching assets and marketing material for digital products.",
                         prompt="${prompt}",
                         temperature=0.4,
