@@ -19,85 +19,26 @@ def recreate_table(func, table_type, table_id):
     print(f"✅ Recreated table: {table_id}")
 
 def create_tables():
-    recreate_table(lambda: jamai.table.create_knowledge_table(
-        p.KnowledgeTableSchemaCreate(
-            id="knowledge-digital-products",
-            cols=[
-                p.ColumnSchemaCreate(id="Source", dtype="str"),
-                p.ColumnSchemaCreate(id="Linked Blueprint", dtype="str"),  # ✅ Add this line
-            ],
-            embedding_model="ellm/BAAI/bge-m3",
-        )
-    ), "knowledge", "knowledge-digital-products")
-
+    # 🔥 Delete all existing knowledge tables first
+    try:
+        existing_knowledge_tables = jamai.table.list_tables("knowledge").items
+        for kt in existing_knowledge_tables:
+            jamai.table.delete_table("knowledge", kt.id)
+            print(f"🗑️ Deleted knowledge table: {kt.id}")
+    except Exception as e:
+        print(f"⚠️ Failed to delete knowledge tables: {e}")
 
     recreate_table(lambda: jamai.table.create_action_table(
         p.ActionTableSchemaCreate(
-            id="action-outline-generator",
-            cols=[
-                p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
-                p.ColumnSchemaCreate(id="audience", dtype="str"),
-                p.ColumnSchemaCreate(id="promise", dtype="str"),
-                p.ColumnSchemaCreate(id="delivery", dtype="str"),
-                p.ColumnSchemaCreate(id="pitch", dtype="str"),
-                p.ColumnSchemaCreate(
-                    id="outline", dtype="str",
-                    gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
-                        system_prompt="You are an expert course creator. Generate a clear, structured outline for a new digital product based on the user's instruction and related knowledge.",
-                        prompt="""
-You're an expert digital product designer. Based on the following product idea, generate a clear, structured course outline.
-
-Product Title: ${user_instruction}
-Target Audience: ${audience}
-Big Promise: ${promise}
-Delivery Method: ${delivery}
-Optional Pitch: ${pitch}
-
-Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and format the output with clear headings and bullet points.
-""",
-                        rag_params=p.RAGParams(table_id="knowledge-digital-products", k=10),
-                        temperature=0.2,
-                        top_p=0.95,
-                        max_tokens=2000,
-                    )
-                ),
-            ]
-        )
-    ), "action", "action-outline-generator")
-
-    recreate_table(lambda: jamai.table.create_action_table(
-        p.ActionTableSchemaCreate(
-            id="action-full-guide-generator",
-            cols=[
-                p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
-                p.ColumnSchemaCreate(
-                    id="guide", dtype="str",
-                    gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
-                        system_prompt="You are a professional ghostwriter. Write a long, motivational, structured full guide for a digital product based on the user's instruction and related documents.",
-                        prompt="Create a full guide titled '${user_instruction}' using all available source documents. Format it with clear numbered modules (e.g. Module I, Module II, etc) and detailed sections.",
-                        rag_params=p.RAGParams(table_id="knowledge-digital-products", k=20),
-                        temperature=0.2,
-                        top_p=0.95,
-                        max_tokens=6000,
-                    )
-                ),
-            ]
-        )
-    ), "action", "action-full-guide-generator")
-
-    recreate_table(lambda: jamai.table.create_action_table(
-        p.ActionTableSchemaCreate(
-            id="action-outline-guide-history",
+            id="action-guide-history",
             cols=[
                 p.ColumnSchemaCreate(id="user_input", dtype="str"),
-                p.ColumnSchemaCreate(id="type", dtype="str"),  # "outline" or "guide"
+                p.ColumnSchemaCreate(id="type", dtype="str"),  # "guide"
                 p.ColumnSchemaCreate(id="content", dtype="str"),
                 p.ColumnSchemaCreate(id="timestamp", dtype="str"),
             ]
         )
-    ), "action", "action-outline-guide-history")
+    ), "action", "action-guide-history")
 
     recreate_table(lambda: jamai.table.create_action_table(
         p.ActionTableSchemaCreate(
@@ -107,7 +48,7 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
                 p.ColumnSchemaCreate(
                     id="video_script", dtype="str",
                     gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
+                        model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
                         system_prompt="You're a professional course presenter and curriculum designer.\n\nWrite a 2–3 minute video script for a course lesson titled \"${lesson_topic}\". This is part of a larger video series — each module should build upon the previous one, not repeat the same hook or opening.\n\nAvoid generic intros like “You're interested in...” or “Let’s dive into…” — make each lesson feel fresh and connected to the journey.\n\nInclude:\n- A unique, engaging hook that references previous content if applicable.\n- Clear and conversational explanation of the lesson topic.\n- Optional visual cues for the presenter (e.g. [On screen:], [Cut to:]).\n\nSpeak directly to the viewer using “you” and “we”. Make it motivating and practical, like a mentor teaching on camera.\n\nAvoid repeating structure or wording from earlier modules. End the script naturally on a full sentence if approaching the token limit.",
                         prompt="""
                         You are a professional course presenter and curriculum designer.
@@ -136,7 +77,6 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
 
                         End on a clean, complete sentence. Do not say “that’s it” or “you got this” every time. Avoid filler.
                         """,
-                        rag_params=p.RAGParams(table_id="knowledge-digital-products", k=5),
                         temperature=0.5,
                         top_p=0.9,
                         max_tokens=1200,
@@ -155,7 +95,7 @@ Use a logical module structure (e.g. 6–8 modules with 3–5 lessons each), and
                 p.ColumnSchemaCreate(
                     id="remix_ideas", dtype="str",
                     gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
+                        model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
                         system_prompt="You’re a viral short-form content strategist. Your job is to take existing video content and generate new, high-performing variations for Instagram Reels and TikTok.",
                         prompt="""
 Analyze the following video and generate 3 creative remix ideas for short-form platforms (Reels, TikTok):
@@ -199,10 +139,11 @@ The tone should be fun, practical, and performance-oriented.
                 p.ColumnSchemaCreate(id="timestamp", dtype="str"),  # 🔹 New: human-readable time
                 p.ColumnSchemaCreate(id="user_instruction", dtype="str"),
                 p.ColumnSchemaCreate(id="delivery_method", dtype="str"),
+                p.ColumnSchemaCreate(id="knowledge_table_id", dtype="str"),  # ✅ Add this line
                 p.ColumnSchemaCreate(
                     id="product_blueprint", dtype="str",
                     gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
+                        model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
                         system_prompt="You're a digital product strategist who helps creators build, name, and position their online offers.",
                         prompt="""
 
@@ -241,7 +182,7 @@ Keep it clear, modern, and value-focused.
                 p.ColumnSchemaCreate(
                     id="output", dtype="str",
                     gen_config=p.LLMGenConfig(
-                        model="ellm/openai/gpt-3.5-turbo",
+                        model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
                         system_prompt="You're a professional course creation strategist. You help creators generate teaching assets and marketing material for digital products.",
                         prompt="${prompt}",
                         temperature=0.4,
