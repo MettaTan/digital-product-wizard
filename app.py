@@ -412,6 +412,24 @@ def split_text_into_blocks(content: str) -> list:
 
     return blocks
 
+def clean_remix_output(text: str) -> str:
+    if not text:
+        return ""
+
+    # Normalize line endings
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Remove duplicate lesson/script headers
+    text = re.sub(r"(Remix\s+Idea\s*\d+:?|Script\s*[:\-]?)", "", text, flags=re.IGNORECASE)
+
+    # Remove excessive newlines
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+
+    # Trim whitespace on each line
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    
+    return "\n".join(lines)
+
 def extract_lesson_titles(text):
     matches = []
     for line in text.splitlines():
