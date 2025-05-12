@@ -420,7 +420,7 @@ def extract_lesson_titles(text):
             matches.append(clean_line)
     return matches
 
-def generate_video_scripts(guide_text):
+def generate_video_scripts(guide_text, user_topic=None, guide_type=None):
     lessons = extract_lesson_titles(guide_text)
     if not lessons:
         return [], "❌ No lesson titles found. Try using headings like 'Lesson 1:' or 'Module 2:' in your guide."
@@ -430,29 +430,28 @@ def generate_video_scripts(guide_text):
 
     for i, lesson in enumerate(lessons):
         next_lesson = lessons[i + 1] if i + 1 < len(lessons) else None
-
-        # Add summary to context for next lesson
         context = f"Previous Summary: {previous_script_summary}\n\n" if previous_script_summary else ""
 
         prompt = f"""
-You are a course content strategist and expert video scriptwriter. Write a detailed, high-quality video script for the lesson titled:
-"{lesson}"
+        You are a video scriptwriter for short-form educational content. Write a high-converting video script for this lesson title:
 
-{context}This lesson comes from a digital product guide designed to teach or inspire transformation. Do NOT repeat intros. Avoid clichés like “Alright, listen up” or “Let’s dive in.”
+        **"{lesson}"**
 
-Each script should feel like a continuation — not a restart.
+        This is part of a guide titled **"{st.session_state.user_topic}"**.
 
-Include:
-- 3–5 key teaching points
-- Transitions that feel natural between ideas
-- Examples, analogies, or frameworks
-- A motivating takeaway at the end
+        Avoid repeating previous lessons or saying "you've got the basics". Each script must feel **fresh and focused only on this topic**.
 
-Conclude with a smooth preview of the next lesson:
-"{next_lesson}"{'' if next_lesson else ' (This is the final module.)'}
+        Include:
+        - 1–2 sentence **hook** to open the video (no repeating "you’ve already done X")
+        - 3–5 key **teaching points** or insights, with natural transitions
+        - 1 quick **example, analogy, or framework**
+        - 1 motivating **takeaway** or mindset shift
+        - 1-sentence **preview of the next lesson**: "{next_lesson}"{'' if not next_lesson else ' (or note it’s the final lesson)'}
 
-Use second-person voice (“you”) to speak directly to the viewer. No fluff.
-"""
+        No fluff. Avoid generalizations. Keep it real and relevant to the topic: "{st.session_state.user_topic}".
+
+        Use second-person voice ("you"). Format clearly with line breaks for each paragraph.
+        """
 
         completion = jamai.table.add_table_rows(
             "action",
@@ -467,11 +466,10 @@ Use second-person voice (“you”) to speak directly to the viewer. No fluff.
         script_text = trim_incomplete_sentence(script_text)
 
         scripts.append((lesson, script_text))
-
-        # Optional: summarize or clip part of this to inject later
         previous_script_summary = script_text.strip().replace("\n", " ")[:350]
 
     return scripts, None
+
 
 def parse_remix_ideas(text):
     """
@@ -715,6 +713,54 @@ def clean_generated_markdown(text):
     text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
     return text.strip()
         
+def fix_numbered_lists(text):
+    lines = text.split("\n")
+    fixed_lines = []
+    number = 1
+    inside_list = False
+
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^1\.\s+", stripped):
+            fixed_lines.append(re.sub(r"^1\.\s+", f"{number}. ", line))
+            number += 1
+            inside_list = True
+        elif inside_list and stripped.startswith("- "):
+            # Sub-bullet, keep as-is
+            fixed_lines.append(line)
+        elif stripped == "":
+            fixed_lines.append(line)
+        else:
+            fixed_lines.append(line)
+            inside_list = False
+            number = 1  # Reset when list ends
+
+    return "\n".join(fixed_lines)
+
+def add_lesson_prefix_to_headings(text):
+    lines = text.splitlines()
+    count = 1
+    updated = []
+    for line in lines:
+        if line.strip().startswith("## "):
+            updated.append(f"## Lesson {count}: {line.strip()[3:].strip()}")
+            count += 1
+        else:
+            updated.append(line)
+    return "\n".join(updated)
+
+def add_module_prefix_to_headings(text):
+    lines = text.splitlines()
+    count = 1
+    updated = []
+    for line in lines:
+        if line.strip().startswith("## "):
+            updated.append(f"## Module {count}: {line.strip()[3:].strip()}")
+            count += 1
+        else:
+            updated.append(line)
+    return "\n".join(updated)
+
 if "notion_api_key" not in st.session_state or "notion_parent_page_id" not in st.session_state:
     api_key, parent_page_id = load_connection_from_file()
     st.session_state.notion_api_key = api_key
@@ -755,7 +801,10 @@ with tab1:
                 jamai.table.create_knowledge_table(
                     p.KnowledgeTableSchemaCreate(
                         id=knowledge_table_id,
-                        cols=[],  # ✅ Do not define reserved columns
+                        cols=[
+                            p.ColumnSchemaCreate(id="Linked Blueprint", dtype="str"),  # ✅ Allowed
+                            p.ColumnSchemaCreate(id="Source", dtype="str")             # ✅ Allowed
+                        ],
                         embedding_model="ellm/BAAI/bge-m3",
                     )
                 )
@@ -894,6 +943,7 @@ with tab2:
         current_step = 0
         progress_bar = st.progress(0)
 
+        # AUDIO
         for audio in audio_files:
             with open("temp_audio.wav", "wb") as f:
                 f.write(audio.read())
@@ -904,51 +954,31 @@ with tab2:
             current_step += 1
             progress_bar.progress(current_step / total_files)
 
-        
+        # PDF
         for pdf in pdf_files:
-            original_name = pdf.name
-            
-            # Check if the filename contains spaces or special characters that need special handling
-            needs_special_handling = " " in original_name or any(c in original_name for c in "&+,;=?@#%<>{}[]|^~`")
-            
-            if needs_special_handling:
-                # Use the two-step process for files with spaces or special characters
-                with open("temp.pdf", "wb") as f:
-                    f.write(pdf.read())
-                
-                # Embed with generic name
-                jamai.table.embed_file("temp.pdf", knowledge_table_id)
-                
-                # Add a separate row with correct title
-                jamai.table.add_table_rows(
-                    "knowledge",
-                    p.RowAddRequest(
-                        table_id=knowledge_table_id,
-                        data=[{
-                            "Title": original_name,
-                            "Text": "",
-                            "Source": original_name,
-                            "Linked Blueprint": selected_blueprint
-                        }],
-                        stream=False
-                    )
+            temp_path = "temp.pdf"
+            with open(temp_path, "wb") as f:
+                f.write(pdf.read())
+
+            # Embed chunks from the PDF
+            jamai.table.embed_file(temp_path, knowledge_table_id)
+
+            # Tag all embedded rows afterward with metadata (especially Linked Blueprint)
+            jamai.table.add_table_rows(
+                "knowledge",
+                p.RowAddRequest(
+                    table_id=knowledge_table_id,
+                    data=[{
+                        "Title": pdf.name,
+                        "Text": "",
+                        "Source": pdf.name,
+                        "Linked Blueprint": selected_blueprint
+                    }],
+                    stream=False
                 )
-                
-                # Clean up
-                os.remove("temp.pdf")
-            else:
-                # For filenames without spaces or special chars, use direct embedding
-                # This avoids creating duplicate entries
-                with open(original_name, "wb") as f:
-                    f.write(pdf.read())
-                
-                # Embed directly with original name
-                jamai.table.embed_file(original_name, knowledge_table_id)
-                
-                # Clean up
-                os.remove(original_name)
-            
-            # Update progress
+            )
+
+            os.remove(temp_path)
             st.session_state.pdf_upload_count += 1
             current_step += 1
             progress_bar.progress(current_step / total_files)
@@ -956,64 +986,108 @@ with tab2:
         progress_bar.empty()
         st.success("✅ All files processed and embedded!")
 
+    if not knowledge_table_id:
+        st.warning("⚠️ Please select a valid product blueprint to view uploads.")
+        st.stop()
+
+    if selected_blueprint:
+        selected_row = next(row for row in blueprint_rows if row["title"]["value"] == selected_blueprint)
+        kt_field = selected_row.get("knowledge_table_id")
+        if isinstance(kt_field, dict) and "value" in kt_field:
+            knowledge_table_id = str(kt_field["value"])
+
     # --- Display Uploaded Files ---
     st.divider()
     st.subheader("📚 Uploaded Files (Knowledge)")
 
     try:
         rows = jamai.table.list_table_rows("knowledge", knowledge_table_id)
+
+        # Auto-delete orphaned title-only rows (created during upload but not linked)
+        orphaned_rows = [
+            r for r in rows.items
+            if r.get("File ID", {}).get("value", "") is None
+            and r.get("Title", {}).get("value", "") != ""
+            and r.get("Text", {}).get("value", "") is None
+        ]
+        if orphaned_rows:
+            row_ids = [r["ID"] for r in orphaned_rows]
+            jamai.table.delete_table_rows(
+                "knowledge",
+                p.RowDeleteRequest(table_id=knowledge_table_id, row_ids=row_ids)
+            )
+
+        # Refresh rows after deletion
+        rows = jamai.table.list_table_rows("knowledge", knowledge_table_id)
+
+        # Unique file tracking
+        processed_files = set()
+        unique_files = []
+
         if not rows.items:
             st.info("No uploaded files yet.")
         else:
-            # Group all rows by title
+            # Group and deduplicate files
             for row in rows.items:
                 title = row.get("Title", {}).get("value", "")
-                if title:
-                    file_map[title].append(row)
+                file_id = row.get("File ID", {}).get("value", "")
 
-            # Show only one expander per file
-            for title, grouped_rows in file_map.items():
+                if file_id and file_id not in processed_files:
+                    file_rows = [r for r in rows.items if r.get("File ID", {}).get("value", "") == file_id]
+                    best_row = max(file_rows, key=lambda r: bool(r.get("Title", {}).get("value", "")))
+                    processed_files.add(file_id)
+                    unique_files.append(best_row)
+
+            for row in unique_files:
+                title = row.get("Title", {}).get("value", "")
+                file_id = row.get("File ID", {}).get("value", "")
+
+                if not title:
+                    continue
+
                 is_audio = title.lower().endswith((".mp3", ".wav", ".m4a"))
                 is_pdf = title.lower().endswith(".pdf")
                 icon = "🎵" if is_audio else "📄"
 
+                file_chunks = [r for r in rows.items if r.get("File ID", {}).get("value", "") == file_id]
+                page_count = len(file_chunks) if is_pdf else 0
+
                 label = f"{icon} {title}"
                 if is_pdf:
-                    text = grouped_rows[0].get("Text", {}).get("value", "")
-                    page_count = text.count("\n\n") + 1 if text else len(grouped_rows)
                     label += f" ({page_count} pages)"
 
                 with st.expander(label):
                     st.markdown(f"**Uploaded File:** {title}")
 
                     if is_audio:
-                        transcript = grouped_rows[0].get("Text", {}).get("value", "")
+                        transcripts = [
+                            r.get("Text", {}).get("value", "")
+                            for r in file_chunks
+                            if r.get("Text", {}).get("value", "")
+                        ]
+                        transcript = transcripts[0] if transcripts else ""
                         st.markdown("**Transcript Preview:**")
                         st.markdown(transcript or "_No transcript available._", unsafe_allow_html=True)
 
-                    if st.button(f"❌ Delete '{title}'", key=f"delete_{title}_{grouped_rows[0]['ID']}"):
+                    if st.button(f"❌ Delete '{title}'", key=f"delete_{title}_{file_id}"):
                         try:
-                            # Fetch all rows again to ensure full context
-                            all_rows = jamai.table.list_table_rows("knowledge", knowledge_table_id).items
+                            if file_id:
+                                # File with embedded chunks — delete by file_id
+                                matching_rows = [
+                                    r for r in rows.items
+                                    if r.get("File ID", {}).get("value") == file_id
+                                ]
+                            else:
+                                # Title-only row — delete by matching title
+                                matching_rows = [
+                                    r for r in rows.items
+                                    if r.get("File ID", {}).get("value") is None and (
+                                        r.get("Source", {}).get("value", "") == title or
+                                        r.get("Title", {}).get("value", "") == title
+                                    )
+                                ]
 
-                            # Try to match by File ID (more reliable), fallback to Source or Title
-                            target_file_id = grouped_rows[0].get("File ID", {}).get("value", "")
-                            matched_rows = []
-
-                            if target_file_id:
-                                matched_rows = [r for r in all_rows if r.get("File ID", {}).get("value", "") == target_file_id]
-
-                            if not matched_rows:
-                                # Fallback: Try Source field (if it exists)
-                                source_name = grouped_rows[0].get("Source", {}).get("value", title)
-                                matched_rows = [r for r in all_rows if r.get("Source", {}).get("value", "") == source_name]
-
-                            if not matched_rows:
-                                # Final fallback: Match by title
-                                matched_rows = [r for r in all_rows if r.get("Title", {}).get("value", "") == title]
-
-                            row_ids = [r["ID"] for r in matched_rows]
-
+                            row_ids = [r["ID"] for r in matching_rows]
                             if row_ids:
                                 jamai.table.delete_table_rows(
                                     "knowledge",
@@ -1031,6 +1105,7 @@ with tab2:
 
     except Exception as e:
         st.warning(f"⚠️ Failed to load knowledge uploads: {e}")
+
 
 with tab3:
     st.header("Generate Full Guide")
@@ -1069,18 +1144,31 @@ with tab3:
 
     if basic_guide_submitted and user_topic:
         st.session_state.user_topic = user_topic
+        st.session_state.guide_type = "essential"
         knowledge_table_id = selected_row.get("knowledge_table_id", {}).get("value", None)
 
         with st.spinner("🧠 Generating Guide..."):
             prompt = f"""
-                Create a detailed, premium-quality guide titled '{user_topic}', with expert positioning, persuasive copy, and complete monetization structure.
-                """
+            You're a professional ghostwriter creating a valuable, free-tier digital guide titled "{user_topic}" for beginners.
+
+            This is the **Essential (Free) Guide**, not the paid version.
+
+            It must:
+            - Provide 6–8 well-structured sections with practical advice
+            - Include detailed explanations and beginner-level examples
+            - Offer value (checklists, frameworks, tips) but **not full-depth strategies**
+            - Encourage readers to consider the Premium version for deeper transformation
+
+            Tone: Motivating, helpful, beginner-friendly, and credible.
+
+            Write the full guide with Markdown formatting (## for section headers, - for bullets, etc.). Avoid emojis, repetition, or filler content.
+            """
 
             completion = jamai.generate_chat_completions(
                 p.ChatRequest(
                     model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
                     messages=[
-                        p.ChatEntry.system("You are a professional ghostwriter. Write a long, motivational, structured full guide for a digital product based on the user's instruction and related documents."),
+                        p.ChatEntry.system("You are a professional ghostwriter creating a compact, valuable digital guide."),
                         p.ChatEntry.user(prompt)
                     ],
                     rag_params=p.RAGParams(table_id=knowledge_table_id, k=10),
@@ -1088,25 +1176,41 @@ with tab3:
                 )
             )
 
-            st.session_state.guide = "".join(chunk.text for chunk in completion if hasattr(chunk, "text"))
-            log_guide_history(user_topic, st.session_state.guide, is_guide=False)
+            raw_output = "".join(chunk.text for chunk in completion if hasattr(chunk, "text")).strip()
+            cleaned_output = re.sub(r"^#+\s*.*\n+", "", raw_output)
+            fixed = fix_numbered_lists(cleaned_output)
+
+            with_lessons = add_lesson_prefix_to_headings(fixed)
+            st.session_state.guide = with_lessons
+            log_guide_history(user_topic, with_lessons, is_guide=True, is_premium=False)
+
 
     if premium_guide_submitted and user_topic:
         if is_paid_user:
             st.session_state.user_topic = user_topic
+            st.session_state.guide_type = "premium"
             knowledge_table_id = selected_row.get("knowledge_table_id", {}).get("value", None)
 
             with st.spinner("📚 Writing Full Guide..."):
-                # Step 1: Generate custom module titles
+                progress = st.progress(0)
+
+                # Step 1: Generate module titles
                 module_plan_prompt = f"""
-                You're a course strategist. Generate a list of 10 high-impact module titles for a premium digital product guide titled '{user_topic}'.
+                You're a course strategist. Generate a list of 8 actionable, high-impact module titles for a premium digital product guide titled "{user_topic}".
 
-                The guide is for:
-                - Audience: {audience}
-                - Promise: {promise}
-                - Delivery: {delivery}
+                This product is designed to:
+                - Help: {audience}
+                - Achieve: {promise}
+                - Delivery method: {delivery}
 
-                Return only a numbered list of concise, engaging module titles that are clear and cover all critical aspects of the product.
+                Do **not** default to general education, Wikipedia-style content, or historical overviews.
+
+                Instead, focus on:
+                - Tangible, monetizable skills
+                - Lessons that help someone build, launch, grow, or sell a digital product
+                - Practical transformation and real-world progress
+
+                Return only a numbered list of module titles. No extra commentary.
                 """
 
                 module_response = jamai.generate_chat_completions(
@@ -1124,27 +1228,31 @@ with tab3:
                 module_text = "".join(chunk.text for chunk in module_response if hasattr(chunk, "text"))
                 modules = [re.sub(r"^\d+\.\s*", "", line.strip()) for line in module_text.splitlines() if line.strip()]
 
-                # Step 2: Generate detailed content per module
+                # Step 2: Generate modules
                 full_guide = ""
                 for i, module_name in enumerate(modules, 1):
+                    progress.progress(int((i - 1) / len(modules) * 100))
+
                     module_prompt = f"""
-                    You're a professional ghostwriter writing an **in-depth premium module** for a digital product guide titled '{user_topic}'.
+                    You're a professional ghostwriter writing an **in-depth premium module** for a digital product guide titled "{user_topic}".
 
-                    Write full content for the chapter: **{module_name}** (Module {i} of {len(modules)}).
+                    Write a full module for a digital product guide. This is Module {i} of {len(modules)} titled: **{module_name}**.
 
-                    Guidelines:
-                    - At least 1,200+ words
-                    - Include practical lessons, examples, and case studies
-                    - Use Markdown formatting:
-                        - `#`, `##`, or `###` for headings
-                        - `-` for bullets, `1.` for numbered lists
-                        - `**bold**`, `*italic*`, and `` `code` `` for inline styling
-                    - Do not use emojis
-                    - Include optional frameworks or checklists
-                    - Vary structure across modules to keep it fresh
-                    - No repetition from earlier modules
+                    Do NOT repeat the module title in the first heading or paragraph. Start directly with engaging educational content. Use appropriate Markdown formatting (##, ###) where helpful.
 
-                    Tone: inspiring, clear, and expert-level.
+                    This guide is meant for people who:
+                    - Want to turn knowledge or skills into digital products
+                    - Are looking for practical, business-oriented steps
+                    - Prefer actionable content over theory
+
+                    Your writing must:
+                    - Be at least 1,200 words
+                    - Include examples, case studies, or step-by-step advice
+                    - Use Markdown formatting (headings, bullets, etc.)
+                    - Avoid fluff, emojis, and repetition
+                    - Include templates, frameworks, or next steps if relevant
+
+                    Tone: clear, expert, motivating — written for someone ready to take action.
                     """
 
                     response = jamai.generate_chat_completions(
@@ -1154,33 +1262,37 @@ with tab3:
                                 p.ChatEntry.system("You are a professional ghostwriter."),
                                 p.ChatEntry.user(module_prompt)
                             ],
-                            rag_params=p.RAGParams(table_id=knowledge_table_id, k=30),
+                            rag_params=p.RAGParams(table_id=knowledge_table_id, k=10),
                             stream=True
                         )
                     )
 
-                    section_text = "".join(chunk.text for chunk in response if hasattr(chunk, "text"))
-                    full_guide += f"## {module_name}\n\n{section_text.strip()}\n\n"
+                    raw_text = "".join(chunk.text for chunk in response if hasattr(chunk, "text")).strip()
+                    cleaned = re.sub(r"^#+\s*.*\n+", "", raw_text)  # Remove first heading if repeated
+                    cleaned = re.sub(rf"(?i)^{re.escape(module_name)}\s*", "", cleaned).strip()
 
-                # Final save
-                st.session_state.guide = full_guide
+                    # ✅ Fix numbered list formatting
+                    fixed = fix_numbered_lists(cleaned)
+
+                    full_guide += f"## {module_name}\n\n{fixed}\n\n"
+
+                progress.progress(100)
+                with_modules = add_module_prefix_to_headings(full_guide)
+                st.session_state.guide = with_modules
                 log_guide_history(user_topic, full_guide, is_guide=True, is_premium=True)
         else:
             st.warning("🚀 Upgrade to Pro to generate premium guides!")
 
     if "guide" in st.session_state:
-        is_premium = is_paid_user
-        guide_type = "Premium Guide" if is_premium else "Essential Guide"
-        download_name = "premium_guide.txt" if is_premium else "essential_guide.txt"
+        guide_type = "Premium Guide" if st.session_state.get("guide_type") == "premium" else "Essential Guide"
+        download_name = "premium_guide.txt" if st.session_state.get("guide_type") == "premium" else "essential_guide.txt"
 
         st.subheader(f"📘 Your {guide_type}")
 
-        # Optional preview of just the first ~1000 characters
         with st.expander("🔍 Preview First Section"):
             preview = st.session_state.guide.strip()[:1500]
             st.markdown(preview + "...\n\n_(Full content available via Notion or download)_")
 
-        # Download as text
         st.download_button(
             label="📥 Download Full Guide",
             data=st.session_state.guide,
@@ -1188,9 +1300,8 @@ with tab3:
             mime="text/plain"
         )
 
-        # Auto-upload or show Notion upload
         if st.session_state.notion_api_key and st.session_state.notion_parent_page_id:
-            if st.button(f"📤 Upload {guide_type} to Notion", key=f"upload_notion_{guide_type}_1"):
+            if st.button(f"📤 Upload {guide_type} to Notion"):
                 success = create_notion_page(
                     st.session_state.notion_api_key,
                     st.session_state.notion_parent_page_id,
@@ -1209,7 +1320,8 @@ with tab3:
             st.error("❌ No guide found. Please generate a full guide first.")
         else:
             with st.spinner("🧠 Generating scripts..."):
-                scripts, error = generate_video_scripts(st.session_state.guide)
+                scripts, error = generate_video_scripts(st.session_state.guide, st.session_state.user_topic, st.session_state.guide_type)
+
                 if error:
                     st.error(error)
                 else:
