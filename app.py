@@ -430,6 +430,28 @@ def clean_remix_output(text: str) -> str:
     
     return "\n".join(lines)
 
+def format_remix_script(script_text: str) -> str:
+    """
+    Parses a 3-part script and labels each section.
+    Assumes the LLM output follows line breaks between hook, body, and CTA.
+    """
+    lines = [line.strip() for line in script_text.strip().split("\n") if line.strip()]
+    
+    if len(lines) < 3:
+        return script_text  # fallback if not enough structure
+
+    hook = lines[0]
+    cta = lines[-1]
+    body = "\n".join(lines[1:-1])
+
+    return f"""**🎯 Hook:** {hook}
+
+**📘 Main Message:**  
+{body}
+
+**📣 CTA:** {cta}
+"""
+
 def extract_lesson_titles(text):
     matches = []
     for line in text.splitlines():
@@ -1447,27 +1469,37 @@ with tab5:
 
         remix_style_instructions = {
             "Growth Content": """
-        Create a short-form script that is optimized to go viral.
+        You're creating viral short-form content.
 
-        - Use a punchy hook in the first line (something surprising, funny, or highly relatable).
-        - Keep the delivery energetic and concise.
-        - End with a strong CTA (e.g. comment, follow, “grab the guide”).
+        Follow this structure:
+        1. **Hook** — Start with a bold, surprising, or relatable statement (max 1 line).
+        2. **Main Point** — Deliver the key message with confidence.
+        3. **CTA** — End with an energetic prompt like “Comment below”, “Follow for more”, or “Grab the guide”.
+
+        Use punchy, casual language. Write it like you'd say it in a 15-second TikTok. No emojis, no markdown — just clear line breaks between parts.
         """,
             "Nurture Content": """
-        Write an educational short-form script that builds trust.
+        You're creating educational short-form content designed to build trust.
 
-        - Start with a clear pain point or insight.
-        - Provide 2–3 actionable takeaways.
-        - End with a CTA like “save this” or “check the link in bio”.
+        Follow this structure:
+        1. **Hook** — Start with a pain point or relatable insight.
+        2. **Main Takeaway** — Share 2–3 helpful tips, steps, or mindset shifts.
+        3. **CTA** — End with a soft call-to-action like “Save this”, “Try it out”, or “Check the link in bio”.
+
+        Keep it calm, credible, and helpful. Use natural, friendly language. No emojis or markdown — just line breaks.
         """,
             "Story / Personal": """
-        Create a relatable, first-person script based on personal experience.
+        You're telling a first-person story to create emotional connection.
 
-        - Start with an authentic moment of struggle, change, or insight.
-        - Describe what happened, ideally tied to the digital product.
-        - End with a reflective or emotional takeaway and soft CTA.
+        Follow this structure:
+        1. **Hook** — Open with a personal realization, question, or vulnerable moment.
+        2. **Story** — Briefly describe the situation or transformation.
+        3. **Takeaway + CTA** — End with a reflection and a gentle prompt like “Tag someone who relates” or “Let me know if you’ve been there too”.
+
+        Write it like you're talking to a friend on camera. No hashtags, no formatting — just plain, relatable storytelling.
         """
         }
+
 
         if st.button("🎨 Generate Remix"):
             with st.spinner("🔊 Transcribing audio..."):
@@ -1479,27 +1511,28 @@ with tab5:
             selected_prompt = remix_style_instructions.get(remix_type, "")
 
             remix_prompt = f"""
-    You're a short-form creator. Write a {remix_type.lower()} video script for TikTok, Reels, or Shorts based on this video input.
+            You are a short-form content creator. Write **one concise script** for a TikTok, Reels, or Shorts video based on the content below.
 
-    Original Caption:
-    \"\"\"{caption}\"\"\"
+            Use this format:
+            Line 1: Hook  
+            Line 2–4: Main Message  
+            Final line: CTA
 
-    Transcript:
-    \"\"\"{transcript}\"\"\"
+            Do NOT return more than one idea or remix. Do NOT include headings, markdown, or emojis.
 
-    On-Screen Captions:
-    \"\"\"{screen_text}\"\"\"
+            Here is your reference content:
 
-    {selected_prompt}
-    Output:
-    - 4–6 lines max
-    - Format it as a script ready for voiceover or face-to-camera
-    - Start with a strong hook
-    - End with a CTA
-    - Use simple, casual, punchy language
+            Original Caption:
+            \"\"\"{caption}\"\"\"
 
-    Only return the script — no titles, no intro, no markdown.
-    """
+            Transcript:
+            \"\"\"{transcript}\"\"\"
+
+            On-Screen Captions:
+            \"\"\"{screen_text}\"\"\"
+
+            {selected_prompt}
+            """
 
             with st.spinner("🎨 Generating remix ideas..."):
                 remix_response = jamai.table.add_table_rows(
@@ -1511,7 +1544,9 @@ with tab5:
                     ),
                 )
 
-                remix_output = "".join(chunk.text for chunk in remix_response if hasattr(chunk, "text"))
+                raw_remix = "".join(chunk.text for chunk in remix_response if hasattr(chunk, "text"))
+                remix_output = format_remix_script(raw_remix)
+
 
             st.session_state.remix_upload_count += 1
 
