@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import streamlit as st
+import extra_streamlit_components as stx
 from jamaibase import JamAI, protocol as p
 from audio_processor import transcribe_audio_whisper, upload_transcription_to_knowledge
 import os
@@ -16,9 +17,16 @@ import pytesseract
 from collections import Counter
 import yt_dlp
 from urllib.parse import urlparse
-from auth_app import authenticator, credentials, users
 from collections import defaultdict
 from slugify import slugify  # Add this import at the top if not already
+import uuid
+from supabase_client import supabase
+from supabase_client import SUPABASE_URL, SUPABASE_KEY
+from supabase import create_client
+from supabase.client import ClientOptions
+from datetime import datetime, timedelta, timezone
+
+
 
 file_map = defaultdict(list)
 
@@ -33,56 +41,133 @@ jamai = JamAI(
 
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
-# Initialize session state for authentication if not present
-if "authentication_status" not in st.session_state:
-    st.session_state["authentication_status"] = None
-if "name" not in st.session_state:
-    st.session_state["name"] = None
-if "username" not in st.session_state:
-    st.session_state["username"] = None
-
-# Try to use the login widget if not authenticated
-if not st.session_state["authentication_status"]:
-    # Call the authenticator login method with the correct parameters
-    # The key parameter is what you were using as the first parameter
-    login_result = authenticator.login(location="main", key="Login")
-    
-    # According to docs, this returns None when location is not 'unrendered'
-    # The authentication status is stored in session_state instead
-    if st.session_state["authentication_status"]:
-        # Successful login
-        name = st.session_state["name"]
-        username = st.session_state["username"]
-    elif st.session_state["authentication_status"] is False:
-        st.error("❌ Incorrect username or password.")
-        st.stop()
-    else:
-        st.warning("🔐 Please log in to continue.")
+def get_user_client():
+    token = st.session_state.get("access_token")
+    if not token:
+        st.error("Missing auth token.")
         st.stop()
 
-# If code reaches here, user is authenticated
-username = st.session_state["username"]
-name = st.session_state["name"]
+    options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
+    return create_client(SUPABASE_URL, SUPABASE_KEY, options)
 
-# Extract email & paid status
-email = credentials["usernames"][username]["email"]
-is_paid_user = users[email]["paid"]
+st.write("Session:", {
+    "user_id": st.session_state.get("user_id"),
+    "access_token": st.session_state.get("access_token"),
+    "refresh_token": st.session_state.get("refresh_token"),
+})
 
-# Optional logout button
-if authenticator.logout("Logout", "sidebar"):
-    st.session_state["authentication_status"] = None
-    st.session_state["name"] = None
-    st.session_state["username"] = None
-    st.experimental_rerun()
+# --- Cookie Manager ---
+cookie_manager = stx.CookieManager()
+cookie_resp = cookie_manager.get_all()
 
-# Main app content
+# --- Try to restore session from cookies ---
+if (
+    cookie_resp and
+    "access_token" in cookie_resp and
+    "refresh_token" in cookie_resp and
+    "user_id" not in st.session_state
+):
+    try:
+        supabase.auth.set_session(cookie_resp["access_token"], cookie_resp["refresh_token"])
+
+        user = supabase.auth.get_user()
+        if user:
+            st.session_state["access_token"] = cookie_resp["access_token"]
+            st.session_state["refresh_token"] = cookie_resp["refresh_token"]
+            st.session_state["user_id"] = user.user.id
+            st.session_state["user_email"] = user.user.email
+            st.session_state["user_name"] = user.user.email.split("@")[0]
+
+            user_client = get_user_client()
+            user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
+            st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+
+            st.rerun()
+    except Exception as e:
+        try:
+            refresh_result = supabase.auth.refresh_session()
+            if refresh_result.session:
+                cookie_manager.set("access_token", refresh_result.session.access_token, expires_at=(datetime.now(timezone.utc) + timedelta(days=7)))
+                cookie_manager.set("refresh_token", refresh_result.session.refresh_token, expires_at=(datetime.now(timezone.utc) + timedelta(days=7)))
+
+                st.session_state["access_token"] = refresh_result.session.access_token
+                st.session_state["refresh_token"] = refresh_result.session.refresh_token
+                st.session_state["user_id"] = refresh_result.user.id
+                st.session_state["user_email"] = refresh_result.user.email
+                st.session_state["user_name"] = refresh_result.user.email.split("@")[0]
+
+                user_client = get_user_client()
+                user_record = user_client.table("users").select("paid").eq("id", refresh_result.user.id).maybe_single().execute()
+                st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+
+                st.stop()
+        except Exception:
+            for key in ["access_token", "refresh_token"]:
+                cookie_manager.delete(key)
+
+# --- Auth UI (Login + Signup) ---
+if "user_id" not in st.session_state:
+    st.title("🔐 Log In or Sign Up")
+
+    mode = st.radio("Choose an option:", ["Log In", "Sign Up"], horizontal=True, key="auth_mode")
+    email = st.text_input("Email", key="auth_email")
+    password = st.text_input("Password", type="password", key="auth_password")
+
+    if mode == "Sign Up":
+        if st.button("Create Account", key="signup_btn"):
+            try:
+                result = supabase.auth.sign_up({"email": email, "password": password})
+                if result.user:
+                    st.success("✅ Account created! Please check your email to confirm before logging in.")
+                    st.stop()
+                else:
+                    st.error("Signup failed. Please try again.")
+            except Exception as e:
+                st.error(f"Signup error: {e}")
+
+    elif mode == "Log In":
+        if st.button("Log In", key="login_btn"):
+            try:
+                result = supabase.auth.sign_in_with_password({"email": email, "password": password})
+
+                if result.user and result.session:
+                    st.session_state["access_token"] = result.session.access_token
+                    st.session_state["refresh_token"] = result.session.refresh_token
+                    st.session_state["user_id"] = result.user.id
+                    st.session_state["user_email"] = result.user.email
+                    st.session_state["user_name"] = result.user.email.split("@")[0]
+
+                    cookie_manager.set("access_token", result.session.access_token, 
+                  expires_at=datetime.now(timezone.utc) + timedelta(days=7))
+                    cookie_manager.set("refresh_token", result.session.refresh_token, 
+                                    expires_at=datetime.now(timezone.utc) + timedelta(days=30))
+
+                    user_client = get_user_client()
+                    user_record = user_client.table("users").select("paid").eq("id", result.user.id).maybe_single().execute()
+                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid credentials or email not confirmed.")
+            except Exception as e:
+                st.error(f"Login error: {e}")
+
+    st.stop()
+
+
+# Prevent access to app until authenticated
+if "user_id" not in st.session_state:
+    st.stop()
+
+# --- App Access Gate ---
+name = st.session_state.get("user_name", "User")
+is_paid_user = st.session_state.get("is_paid_user", False)
+
+# --- Main UI ---
 st.title("Digital Product Creator - Audio to Guide")
 st.success(f"Welcome {name}! Your paid status: {'Premium' if is_paid_user else 'Free'}")
 
 # Rest of your application...
-
-# Rest of your application...
-
 if "audio_upload_count" not in st.session_state:
     st.session_state.audio_upload_count = 0
 
@@ -93,7 +178,15 @@ if "remix_upload_count" not in st.session_state:
     st.session_state.remix_upload_count = 0
 
 CONNECTION_FILE = ".notion_connection.json"
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Product Blueprint", "Upload + Transcribe", "Create Guides", "Connect to Notion", "Remix Existing Video", "Course Launch Kit"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "Product Blueprint",
+    "Upload + Transcribe",
+    "Connect to Notion",
+    "Create Guides",
+    "Course Launch Kit",
+    "Remix Existing Video",
+    "Full Product History"
+])
 
 def download_video_from_url(url, output_path="downloaded_video.mp4"):
     """
@@ -419,38 +512,48 @@ def clean_remix_output(text: str) -> str:
     # Normalize line endings
     text = text.replace('\r\n', '\n').replace('\r', '\n')
 
-    # Remove duplicate lesson/script headers
+    # Remove duplicate headers
     text = re.sub(r"(Remix\s+Idea\s*\d+:?|Script\s*[:\-]?)", "", text, flags=re.IGNORECASE)
 
-    # Remove excessive newlines
+    # Remove excessive triple+ newlines but keep doubles
     text = re.sub(r"\n{3,}", "\n\n", text.strip())
 
-    # Trim whitespace on each line
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    
-    return "\n".join(lines)
+    # Don't strip out single blank lines
+    return text.strip()
 
 def format_remix_script(script_text: str) -> str:
-    """
-    Parses a 3-part script and labels each section.
-    Assumes the LLM output follows line breaks between hook, body, and CTA.
-    """
-    lines = [line.strip() for line in script_text.strip().split("\n") if line.strip()]
-    
-    if len(lines) < 3:
-        return script_text  # fallback if not enough structure
+    import re
 
-    hook = lines[0]
-    cta = lines[-1]
-    body = "\n".join(lines[1:-1])
+    # Normalize
+    text = script_text.strip().replace('\r\n', '\n').replace('\r', '\n')
 
-    return f"""**🎯 Hook:** {hook}
+    # Remove model-added labels (if any)
+    text = re.sub(r'^(Hook|Main Message|CTA)\s*[:\-]?', '', text, flags=re.IGNORECASE | re.MULTILINE)
 
-**📘 Main Message:**  
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(lines) >= 3:
+        hook = lines[0]
+        cta = lines[-1]
+        body = "\n".join(lines[1:-1])
+    else:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if len(sentences) >= 3:
+            hook = sentences[0]
+            cta = sentences[-1]
+            body = " ".join(sentences[1:-1])
+        else:
+            return text
+
+    return f"""🎯 **Hook**  
+{hook}
+
+📘 **Main Message**  
 {body}
 
-**📣 CTA:** {cta}
+📣 **CTA**  
+{cta}
 """
+
 
 def extract_lesson_titles(text):
     matches = []
@@ -520,7 +623,7 @@ def parse_remix_ideas(text):
     ideas = [p.strip() for p in parts if p.strip()]
     return ideas
 
-def log_remix_to_jamai(video_url, remix_ideas, caption=""):
+def log_remix_to_jamai(video_url, remix_text, caption="", linked_product="", visual_idea="", remix_type=""):
     try:
         jamai.table.add_table_rows(
             "action",
@@ -529,9 +632,10 @@ def log_remix_to_jamai(video_url, remix_ideas, caption=""):
                 data=[{
                     "video_link": video_url,
                     "video_caption": caption,
-                    "remix_1": remix_ideas[0] if len(remix_ideas) > 0 else "",
-                    "remix_2": remix_ideas[1] if len(remix_ideas) > 1 else "",
-                    "remix_3": remix_ideas[2] if len(remix_ideas) > 2 else "",
+                    "remix_1": remix_text,
+                    "linked_product": linked_product,
+                    "visual_idea": visual_idea,
+                    "remix_type": remix_type,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }],
                 stream=False
@@ -573,10 +677,12 @@ def display_remix_history():
         for row in rows.items:
             video_url = row.get("video_link", {}).get("value", "")
             video_caption = row.get("video_caption", {}).get("value", "")
-            remix_1 = clean_generated_markdown(row.get("remix_1", {}).get("value", ""))
-            remix_2 = clean_generated_markdown(row.get("remix_2", {}).get("value", ""))
-            remix_3 = clean_generated_markdown(row.get("remix_3", {}).get("value", ""))
+            raw_remix = row.get("remix_1", {}).get("value", "")  # We're only using remix_1 now
             row_id = row.get("ID")
+
+            # Clean formatting artifacts
+            remix_text = clean_generated_markdown(raw_remix)
+            remix_text = remix_text.replace("<b>", "**").replace("</b>", "**")
 
             label = (
                 "📁 Local Upload" if not video_url or video_url == "Uploaded file"
@@ -590,16 +696,8 @@ def display_remix_history():
                 if video_caption:
                     st.markdown(f"📝 **Caption:** {video_caption}")
 
-                if remix_1:
-                        st.markdown(f"**Remix 1:**\n\n{remix_1}")
-                        st.divider()
-
-                if remix_2:
-                    st.markdown(f"**Remix 2:**\n\n{remix_2}")
-                    st.divider()
-
-                if remix_3:
-                    st.markdown(f"**Remix 3:**\n\n{remix_3}")
+                if remix_text:
+                    st.markdown(remix_text)
 
                 if st.button("❌ Delete this entry", key=f"delete_{row_id}"):
                     jamai.table.delete_table_rows(
@@ -613,6 +711,7 @@ def display_remix_history():
 
     except Exception as e:
         st.warning(f"⚠️ Failed to load history: {e}")
+
 
 def display_guide_history():
     st.subheader("📚 Generated Guide History")
@@ -916,7 +1015,18 @@ with tab1:
 
 
 with tab2:
-    st.header("📂 Upload for PDF → Course or Podcast → Course")
+    import uuid
+
+    MAX_UPLOADS_FREE = 5
+    MAX_FILE_SIZE_MB = 25
+
+    if "uploaded_filenames" not in st.session_state:
+        st.session_state.uploaded_filenames = set()
+
+    if "upload_count" not in st.session_state:
+        st.session_state.upload_count = 0
+
+    st.header("\U0001F4C2 Upload for PDF → Course or Podcast → Course")
 
     st.markdown("""
     Upload content you'd like included in your course:
@@ -927,51 +1037,41 @@ with tab2:
     _(Optional: You can skip this step to use our expert-built knowledge base instead.)_
     """)
 
-    AUDIO_LIMIT = 3
-    PDF_LIMIT = 5
-
-    if "audio_upload_count" not in st.session_state:
-        st.session_state.audio_upload_count = 0
-    if "pdf_upload_count" not in st.session_state:
-        st.session_state.pdf_upload_count = 0
-
-    audio_files = st.file_uploader("🎧 Upload a podcast or voice note", type=["mp3", "wav"], accept_multiple_files=True, key="audio_upload")
-    pdf_files = st.file_uploader("📄 Upload a PDF document", type=["pdf"], accept_multiple_files=True, key="pdf_upload")
+    audio_files = st.file_uploader("\U0001F3A7 Upload a podcast or voice note", type=["mp3", "wav"], accept_multiple_files=True, key="audio_upload")
+    pdf_files = st.file_uploader("\U0001F4C4 Upload a PDF document", type=["pdf"], accept_multiple_files=True, key="pdf_upload")
 
     if not is_paid_user:
-        st.info(f"🎧 Audio uploads used: {st.session_state.audio_upload_count}/{AUDIO_LIMIT}")
-        st.info(f"📄 PDF uploads used: {st.session_state.pdf_upload_count}/{PDF_LIMIT}")
+        total_used = st.session_state.upload_count
+        uploads_remaining = MAX_UPLOADS_FREE - total_used
 
-        if st.session_state.audio_upload_count >= AUDIO_LIMIT:
-            st.warning("❌ Free tier audio upload limit reached.")
+        st.info(f"\U0001F4E5 Uploads used: {total_used}/{MAX_UPLOADS_FREE}")
+        st.caption("Limit includes both audio and PDF uploads.")
+
+        if uploads_remaining < 0:
+            st.warning("❌ Free tier upload limit reached. [Upgrade to Pro](#) to unlock unlimited uploads.")
             audio_files = []
-
-        if st.session_state.pdf_upload_count >= PDF_LIMIT:
-            st.warning("❌ Free tier PDF upload limit reached.")
             pdf_files = []
+        else:
+            audio_files = audio_files[:uploads_remaining] if audio_files else []
+            pdf_files = pdf_files[:uploads_remaining - len(audio_files)] if pdf_files else []
 
-    process_disabled = (not audio_files and not pdf_files)
+    process_disabled = not (audio_files or pdf_files)
+    knowledge_table_id = None
 
-    knowledge_table_id = None  # Ensure it's always defined
-    
     try:
         blueprint_rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
         if not blueprint_rows:
             st.warning("❗ No product blueprints found. Please create one in Tab 1 first.")
             st.stop()
 
-        blueprint_options = {row["title"]["value"]: row.get("title", {}).get("value") for row in blueprint_rows if "title" in row and row.get("title", {}).get("value")}
-        selected_blueprint = st.selectbox("📌 Link uploads to a product blueprint:", list(blueprint_options.keys()))
+        blueprint_options = {row["title"]["value"]: row.get("title", {}).get("value") for row in blueprint_rows if "title" in row}
+        selected_blueprint = st.selectbox("\U0001F4CC Link uploads to a product blueprint:", list(blueprint_options.keys()))
         selected_row = next(row for row in blueprint_rows if row["title"]["value"] == selected_blueprint)
-        kt_field = selected_row.get("knowledge_table_id")
-        if isinstance(kt_field, dict) and "value" in kt_field:
-            knowledge_table_id = str(kt_field["value"])
-        else:
-            knowledge_table_id = None
+        knowledge_table_id = selected_row.get("knowledge_table_id", {}).get("value")
 
     except Exception as e:
         st.error(f"❌ Failed to load product blueprints: {e}")
-        selected_blueprint = None
+        st.stop()
 
     if st.button("⏭️ Skip and Use Built-In Knowledge Only"):
         st.session_state.skipped_upload = True
@@ -983,35 +1083,51 @@ with tab2:
         current_step = 0
         progress_bar = st.progress(0)
 
-        # AUDIO
-        for audio in audio_files:
+        def is_valid_size(file):
+            return file.size <= MAX_FILE_SIZE_MB * 1024 * 1024
+
+        for file in audio_files:
+            if file.name in st.session_state.uploaded_filenames:
+                st.warning(f"⛔ '{file.name}' has already been uploaded. Skipping.")
+                continue
+            if not is_valid_size(file):
+                st.warning(f"❌ Skipped '{file.name}' — exceeds {MAX_FILE_SIZE_MB}MB.")
+                continue
+
             with open("temp_audio.wav", "wb") as f:
-                f.write(audio.read())
+                f.write(file.read())
+
             transcription = transcribe_audio_whisper("temp_audio.wav")
-            upload_transcription_to_knowledge(transcription, title=audio.name, blueprint=selected_blueprint)
+            file_id = str(uuid.uuid4())
+            upload_transcription_to_knowledge(transcription, title=file.name, blueprint=selected_blueprint, table_id=knowledge_table_id, file_id=file_id)
             clean_temp_files()
-            st.session_state.audio_upload_count += 1
+
+            st.session_state.uploaded_filenames.add(file.name)
+            st.session_state.upload_count += 1
             current_step += 1
             progress_bar.progress(current_step / total_files)
 
-        # PDF
-        for pdf in pdf_files:
+        for file in pdf_files:
+            if file.name in st.session_state.uploaded_filenames:
+                st.warning(f"⛔ '{file.name}' has already been uploaded. Skipping.")
+                continue
+            if not is_valid_size(file):
+                st.warning(f"❌ Skipped '{file.name}' — exceeds {MAX_FILE_SIZE_MB}MB.")
+                continue
+
             temp_path = "temp.pdf"
             with open(temp_path, "wb") as f:
-                f.write(pdf.read())
+                f.write(file.read())
 
-            # Embed chunks from the PDF
             jamai.table.embed_file(temp_path, knowledge_table_id)
-
-            # Tag all embedded rows afterward with metadata (especially Linked Blueprint)
             jamai.table.add_table_rows(
                 "knowledge",
                 p.RowAddRequest(
                     table_id=knowledge_table_id,
                     data=[{
-                        "Title": pdf.name,
+                        "Title": file.name,
                         "Text": "",
-                        "Source": pdf.name,
+                        "Source": file.name,
                         "Linked Blueprint": selected_blueprint
                     }],
                     stream=False
@@ -1019,12 +1135,15 @@ with tab2:
             )
 
             os.remove(temp_path)
-            st.session_state.pdf_upload_count += 1
+            st.session_state.uploaded_filenames.add(file.name)
+            st.session_state.upload_count += 1
             current_step += 1
             progress_bar.progress(current_step / total_files)
 
         progress_bar.empty()
         st.success("✅ All files processed and embedded!")
+        st.rerun()
+
 
     if not knowledge_table_id:
         st.warning("⚠️ Please select a valid product blueprint to view uploads.")
@@ -1146,8 +1265,33 @@ with tab2:
     except Exception as e:
         st.warning(f"⚠️ Failed to load knowledge uploads: {e}")
 
-
 with tab3:
+
+    st.header("Connect Your Notion")
+    st.markdown("""
+    ### How to Connect
+    1. Go to [Notion Developers](https://www.notion.com/my-integrations) and create a new Integration.
+    2. Copy your Internal Integration Token (API Key).
+    3. Create a blank page (e.g., "My Guides") in your Notion workspace.
+    4. Open that page, click `...` → `Connections` → add your Integration.
+    5. Copy the Page URL and paste it below.
+    """)
+    with st.form("notion_connection_form"):
+        api_key = st.text_input("Paste your Notion Integration API Key:", type="password", value=st.session_state.notion_api_key)
+        parent_page_link = st.text_input("Paste your Parent Page Link:", value=st.session_state.notion_parent_page_id)
+        submitted = st.form_submit_button("Save Connection")
+    if submitted:
+        st.session_state.notion_api_key = api_key
+        if "/" in parent_page_link:
+            raw_page_id = parent_page_link.split("-")[-1]
+            cleaned_page_id = raw_page_id.split("?")[0]
+            st.session_state.notion_parent_page_id = cleaned_page_id
+        else:
+            st.session_state.notion_parent_page_id = parent_page_link
+        save_connection_to_file(api_key, st.session_state.notion_parent_page_id)
+        st.success("✅ Notion connection saved!")
+
+with tab4:
     st.header("Generate Full Guide")
     st.divider()
     st.subheader("Step 1: Select a Product Blueprint")
@@ -1378,34 +1522,162 @@ with tab3:
 
     st.divider()
     display_guide_history()
-with tab4:
-
-    st.header("Connect Your Notion")
-    st.markdown("""
-    ### How to Connect
-    1. Go to [Notion Developers](https://www.notion.com/my-integrations) and create a new Integration.
-    2. Copy your Internal Integration Token (API Key).
-    3. Create a blank page (e.g., "My Guides") in your Notion workspace.
-    4. Open that page, click `...` → `Connections` → add your Integration.
-    5. Copy the Page URL and paste it below.
-    """)
-    with st.form("notion_connection_form"):
-        api_key = st.text_input("Paste your Notion Integration API Key:", type="password", value=st.session_state.notion_api_key)
-        parent_page_link = st.text_input("Paste your Parent Page Link:", value=st.session_state.notion_parent_page_id)
-        submitted = st.form_submit_button("Save Connection")
-    if submitted:
-        st.session_state.notion_api_key = api_key
-        if "/" in parent_page_link:
-            raw_page_id = parent_page_link.split("-")[-1]
-            cleaned_page_id = raw_page_id.split("?")[0]
-            st.session_state.notion_parent_page_id = cleaned_page_id
-        else:
-            st.session_state.notion_parent_page_id = parent_page_link
-        save_connection_to_file(api_key, st.session_state.notion_parent_page_id)
-        st.success("✅ Notion connection saved!")
 
 with tab5:
+    st.header("📦 Course Launch Kit Generator")
+
+    try:
+        # Load product blueprints
+        rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        if not rows:
+            st.warning("❗ Please create a product blueprint first.")
+            st.stop()
+
+        options = {row["title"]["value"]: row for row in rows if "title" in row and row.get("title", {}).get("value")}
+        selected_title = st.selectbox("Pick a product blueprint:", list(options.keys()))
+        selected_row = options[selected_title]
+
+        # Extract values
+        title = selected_row["title"]["value"]
+        audience = selected_row.get("audience", {}).get("value", "")
+        promise = selected_row.get("promise", {}).get("value", "")
+        delivery = selected_row.get("delivery_method", {}).get("value", "")
+        pitch = selected_row.get("pitch", {}).get("value", "")
+    except Exception as e:
+        st.error(f"❌ Failed to load blueprints: {e}")
+        st.stop()
+
+    # Generate assets on click
+    if st.button("🚀 Generate All Course Assets"):
+        with st.spinner("Generating slides, workbook, emails, and more..."):
+            asset_prompts = [
+                ("Slides", f"""
+For a course titled '{title}' for an audience of {audience}, generate 3 teaching slide titles and 2–3 bullet points for each module in the course.
+
+Each module should include:
+- Slide titles
+- Bullet points under each
+Use a teaching tone suitable for a video course.
+"""),
+                ("Workbook", f"""
+Create one practical workbook exercise per module for a course called '{title}'.
+
+Each exercise should:
+- Reinforce that module's learning
+- Be actionable
+- Be student-friendly (no jargon)
+
+List as:
+Module Title → Exercise → Instructions
+"""),
+                ("Email Launch Sequence", f"""
+Generate a 4-part email sequence to launch a digital product titled '{title}' for {audience}.
+
+Tone: professional, clear, value-driven.
+
+Each email should have:
+- Subject line
+- Body content (~150–200 words)
+
+Focus on benefits, objections, and motivating action.
+"""),
+                ("Launch Checklist", f"""
+Write a digital course launch checklist.
+
+Split into:
+- Pre-Launch
+- Launch Week
+- Post-Launch
+
+Include items like email setup, social media content, Discord prep, etc.
+"""),
+                ("Discord Welcome Message", f"""
+Write a welcome message for a private Discord for a course titled '{title}'.
+
+Include:
+- Friendly welcome
+- Course access tips
+- Rules
+- Support instructions
+""")
+            ]
+
+            generated_assets = {}
+
+            for label, prompt in asset_prompts:
+                try:
+                    response = jamai.table.add_table_rows(
+                        "action",
+                        p.RowAddRequest(
+                            table_id="action-course-assets-generator",
+                            data=[{"prompt": prompt}],
+                            stream=True
+                        )
+                    )
+                    full_text = "".join(chunk.text for chunk in response if hasattr(chunk, "text"))
+                    generated_assets[label] = full_text.strip()
+                except Exception as e:
+                    st.warning(f"⚠️ Failed to generate {label}: {e}")
+
+            st.session_state.course_assets = generated_assets
+            st.success("✅ Assets generated!")
+
+            try:
+                jamai.table.add_table_rows(
+                    "action",
+                    p.RowAddRequest(
+                        table_id="action-course-assets-history",
+                        data=[{
+                            "title": title,
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "slides": generated_assets.get("Slides", ""),
+                            "workbook": generated_assets.get("Workbook", ""),
+                            "emails": generated_assets.get("Email Launch Sequence", ""),
+                            "checklist": generated_assets.get("Launch Checklist", ""),
+                            "discord": generated_assets.get("Discord Welcome Message", "")
+                        }],
+                        stream=False
+                    )
+                )
+            except Exception as e:
+                st.warning(f"⚠️ Failed to save asset bundle to history: {e}")
+    # Display + Download
+    if "course_assets" in st.session_state:
+        st.subheader("📂 Course Assets Preview")
+        for section, content in st.session_state.course_assets.items():
+            with st.expander(f"📘 {section}"):
+                st.markdown(content)
+
+        full_export = "\n\n".join([f"## {k}\n\n{v}" for k, v in st.session_state.course_assets.items()])
+        st.download_button("📄 Download All as Text", full_export, file_name="course_assets.txt", mime="text/plain")
+
+    st.divider()
+    display_course_assets_history()
+
+with tab6:
     st.header("🎬 Remix an Existing Video")
+
+    # Blueprint selector for remix tracking
+    try:
+        remix_blueprint_rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        if remix_blueprint_rows:
+            remix_options = [row["title"]["value"] for row in remix_blueprint_rows if "title" in row and row["title"]["value"]]
+            selected_blueprint = st.selectbox("📌 Link this remix to a product blueprint:", remix_options)
+
+            # Get full blueprint row
+            blueprint_row = next(row for row in remix_blueprint_rows if row.get("title", {}).get("value") == selected_blueprint)
+
+            product_title = blueprint_row.get("title", {}).get("value", "")
+            product_pitch = blueprint_row.get("pitch", {}).get("value", "")
+            product_promise = blueprint_row.get("promise", {}).get("value", "")
+            product_delivery = blueprint_row.get("delivery_method", {}).get("value", "")
+
+        else:
+            st.warning("❗ No product blueprints found. Please create one in Tab 1 first.")
+            selected_blueprint = None
+    except Exception as e:
+        st.error(f"❌ Failed to load blueprints: {e}")
+        selected_blueprint = None
 
     REMIX_LIMIT = 10
 
@@ -1511,16 +1783,46 @@ with tab5:
             selected_prompt = remix_style_instructions.get(remix_type, "")
 
             remix_prompt = f"""
-            You are a short-form content creator. Write **one concise script** for a TikTok, Reels, or Shorts video based on the content below.
+            You are a short-form content creator hired to generate **marketing content** for a digital product.
 
-            Use this format:
-            Line 1: Hook  
-            Line 2–4: Main Message  
-            Final line: CTA
+            You are rewriting a real video script to align with this product:
 
-            Do NOT return more than one idea or remix. Do NOT include headings, markdown, or emojis.
+            🛍️ **Product Info**
+            Title: {product_title}  
+            Promise: {product_promise}  
+            Delivery Method: {product_delivery}  
+            Pitch: {product_pitch}
 
-            Here is your reference content:
+            ---
+
+            🎬 **Script Format (Must-Follow)**
+
+            Your output MUST contain exactly **three sections**, each separated by a line break:
+
+            1. Hook — 1 line, catchy and scroll-stopping
+            2. Main Message — **3 to 4 complete lines** (not sentences) that clearly explain the value of this product. Include transformation, who it helps, what it includes, and what makes it special.
+            3. CTA — 1 final line with a strong, unique call-to-action that includes the product name.
+
+            ✅ Use line breaks between each section  
+            ❌ Do NOT label the sections (no “Hook:”, “Main Message:”, etc.)  
+            ❌ Do NOT include markdown, formatting, or extra script variations
+
+            ---
+
+            📽️ **Visual Direction (AFTER the script)**
+
+            After the script, skip a line and write exactly:
+            Suggested visuals —
+            
+            Then describe 1–2 short sentences of visual or b-roll ideas that directly support **this specific script**.
+
+            ---
+
+            🚫 Do not include multiple remix ideas. Only return one final script + visuals.
+
+            ---
+
+            🎥 Video Source Info:
 
             Original Caption:
             \"\"\"{caption}\"\"\"
@@ -1544,129 +1846,110 @@ with tab5:
                     ),
                 )
 
-                raw_remix = "".join(chunk.text for chunk in remix_response if hasattr(chunk, "text"))
-                remix_output = format_remix_script(raw_remix)
+                raw_response = "".join(chunk.text for chunk in remix_response if hasattr(chunk, "text")).strip()
 
+                # Look for suggested visuals case-insensitively and strip cleanly
+                split_match = re.split(r'suggested visuals\s*[\-–—:]', raw_response, flags=re.IGNORECASE)
+
+                if len(split_match) == 2:
+                    script_part = split_match[0].strip()
+                    visual_note = split_match[1].strip()
+                else:
+                    script_part = raw_response
+                    visual_note = ""
+
+                # Format the main script
+                remix_output = format_remix_script(script_part.strip())
 
             st.session_state.remix_upload_count += 1
 
             st.subheader("📜 Remix Script")
             st.markdown(clean_remix_output(remix_output))
+
+            if visual_note.strip():
+                st.markdown("🎞️ **Suggested Visuals / B-Roll:**")
+                st.markdown(clean_remix_output(visual_note.strip()))
+
+            # ✅ Allow download of script only
             st.download_button("📥 Download Script", remix_output, file_name="remix_script.txt", mime="text/plain")
 
+            # ✅ Log both script and visuals (optional enhancement if you expand schema later)
             source_url = video_url if video_url else "Uploaded file"
-            log_remix_to_jamai(source_url, [remix_output], st.session_state.caption)
+            log_remix_to_jamai(
+                video_url if video_url else "Uploaded file",
+                remix_output,
+                caption=st.session_state.caption,
+                linked_product=selected_blueprint,
+                visual_idea=visual_note.strip(),
+                remix_type=remix_type
+            )
 
     st.divider()
     display_remix_history()
-with tab6:
-    st.header("📦 Course Launch Kit Generator")
+
+with tab7:
+    st.header("📦 Full Product History")
 
     try:
-        # Load product blueprints
-        rows = jamai.table.list_table_rows("action", "action-product-blueprint").items
-        if not rows:
-            st.warning("❗ Please create a product blueprint first.")
+        blueprints = jamai.table.list_table_rows("action", "action-product-blueprint").items
+        guides = jamai.table.list_table_rows("action", "action-guide-history").items
+        remixes = jamai.table.list_table_rows("action", "action-remix-history").items
+        assets = jamai.table.list_table_rows("action", "action-course-assets-history").items
+
+        if not blueprints:
+            st.info("No product blueprints found.")
             st.stop()
 
-        options = {row["title"]["value"]: row for row in rows if "title" in row and row.get("title", {}).get("value")}
-        selected_title = st.selectbox("Pick a product blueprint:", list(options.keys()))
-        selected_row = options[selected_title]
+        for bp in blueprints:
+            title = bp.get("title", {}).get("value", "")
+            blueprint_text = bp.get("product_blueprint", {}).get("value", "")
+            timestamp = bp.get("timestamp", {}).get("value", "")
 
-        # Extract values
-        title = selected_row["title"]["value"]
-        audience = selected_row.get("audience", {}).get("value", "")
-        promise = selected_row.get("promise", {}).get("value", "")
-        delivery = selected_row.get("delivery_method", {}).get("value", "")
-        pitch = selected_row.get("pitch", {}).get("value", "")
+            with st.expander(f"🧠 {title} — {timestamp}"):
+                st.markdown("### 🧱 Product Blueprint")
+                st.markdown(blueprint_text or "_Not available._")
+
+                # Guides
+                guide_matches = [g for g in guides if g.get("user_input", {}).get("value") == title]
+                for gtype in ["essential", "premium"]:
+                    guide = next((g for g in guide_matches if g.get("type", {}).get("value") == gtype), None)
+                    if guide:
+                        label = "📝 Essential Guide" if gtype == "essential" else "💎 Premium Guide"
+                        st.markdown(f"### {label}")
+                        st.markdown(guide.get("content", {}).get("value", "") or "_Missing._")
+
+                # Remixes
+                remix_matches = [r for r in remixes if r.get("linked_product", {}).get("value") == title]
+                if remix_matches:
+                    st.markdown("### 🎬 Video Remixes")
+                    for remix in remix_matches:
+                        caption = remix.get("video_caption", {}).get("value", "")
+                        remix_text = remix.get("remix_1", {}).get("value", "")
+                        visuals = remix.get("visual_idea", {}).get("value", "")
+                        remix_type = remix.get("remix_type", {}).get("value", "")
+                        st.markdown(f"**{remix_type or 'Remix'} — {caption or 'No caption'}**")
+                        st.markdown(remix_text or "_No script._")
+                        if visuals:
+                            st.markdown(f"**🎞️ Suggested Visuals:**\n{visuals.strip()}")
+
+                # Course Assets
+                kit = next((a for a in assets if a.get("title", {}).get("value") == title), None)
+                if kit:
+                    st.markdown("### 🧰 Course Launch Kit")
+                    for field, label in {
+                        "slides": "🖥️ Slides",
+                        "workbook": "📓 Workbook",
+                        "emails": "✉️ Emails",
+                        "checklist": "✅ Checklist",
+                        "discord": "💬 Discord"
+                    }.items():
+                        content = kit.get(field, {}).get("value", "")
+                        if content:
+                            st.markdown(f"#### {label}")
+                            st.markdown(content.strip())
+
+                st.divider()
+
+
     except Exception as e:
-        st.error(f"❌ Failed to load blueprints: {e}")
-        st.stop()
-
-    # Generate assets on click
-    if st.button("🚀 Generate All Course Assets"):
-        with st.spinner("Generating slides, workbook, emails, and more..."):
-            asset_prompts = [
-                ("Slides", f"""
-For a course titled '{title}' for an audience of {audience}, generate 3 teaching slide titles and 2–3 bullet points for each module in the course.
-
-Each module should include:
-- Slide titles
-- Bullet points under each
-Use a teaching tone suitable for a video course.
-"""),
-                ("Workbook", f"""
-Create one practical workbook exercise per module for a course called '{title}'.
-
-Each exercise should:
-- Reinforce that module's learning
-- Be actionable
-- Be student-friendly (no jargon)
-
-List as:
-Module Title → Exercise → Instructions
-"""),
-                ("Email Launch Sequence", f"""
-Generate a 4-part email sequence to launch a digital product titled '{title}' for {audience}.
-
-Tone: professional, clear, value-driven.
-
-Each email should have:
-- Subject line
-- Body content (~150–200 words)
-
-Focus on benefits, objections, and motivating action.
-"""),
-                ("Launch Checklist", f"""
-Write a digital course launch checklist.
-
-Split into:
-- Pre-Launch
-- Launch Week
-- Post-Launch
-
-Include items like email setup, social media content, Discord prep, etc.
-"""),
-                ("Discord Welcome Message", f"""
-Write a welcome message for a private Discord for a course titled '{title}'.
-
-Include:
-- Friendly welcome
-- Course access tips
-- Rules
-- Support instructions
-""")
-            ]
-
-            generated_assets = {}
-
-            for label, prompt in asset_prompts:
-                try:
-                    response = jamai.table.add_table_rows(
-                        "action",
-                        p.RowAddRequest(
-                            table_id="action-course-assets-generator",
-                            data=[{"prompt": prompt}],
-                            stream=True
-                        )
-                    )
-                    full_text = "".join(chunk.text for chunk in response if hasattr(chunk, "text"))
-                    generated_assets[label] = full_text.strip()
-                except Exception as e:
-                    st.warning(f"⚠️ Failed to generate {label}: {e}")
-
-            st.session_state.course_assets = generated_assets
-            st.success("✅ Assets generated!")
-
-    # Display + Download
-    if "course_assets" in st.session_state:
-        st.subheader("📂 Course Assets Preview")
-        for section, content in st.session_state.course_assets.items():
-            with st.expander(f"📘 {section}"):
-                st.markdown(content)
-
-        full_export = "\n\n".join([f"## {k}\n\n{v}" for k, v in st.session_state.course_assets.items()])
-        st.download_button("📄 Download All as Text", full_export, file_name="course_assets.txt", mime="text/plain")
-
-    st.divider()
-    display_course_assets_history()
+        st.error(f"⚠️ Failed to load product history: {e}")

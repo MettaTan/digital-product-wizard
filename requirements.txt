@@ -9,3 +9,4 @@ pytesseract
 yt-dlp
 streamlit-authenticator
 python-slugify
+supabase

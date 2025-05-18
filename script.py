@@ -96,7 +96,7 @@ def create_tables():
                     id="remix_ideas", dtype="str",
                     gen_config=p.LLMGenConfig(
                         model="ellm/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-                        system_prompt="You’re a viral short-form content strategist. Your job is to take existing video content and generate new, high-performing variations for Instagram Reels and TikTok.",
+                        system_prompt="You are a short-form content creator. Your job is to generate one engaging, social-native video script for Instagram Reels or TikTok, based on existing video content. The goal is to promote a specific digital product. Include one script only.",
                         prompt="""
 Analyze the following video and generate 3 creative remix ideas for short-form platforms (Reels, TikTok):
 
@@ -125,8 +125,10 @@ The tone should be fun, practical, and performance-oriented.
                 p.ColumnSchemaCreate(id="video_link", dtype="str"),
                 p.ColumnSchemaCreate(id="video_caption", dtype="str"),
                 p.ColumnSchemaCreate(id="remix_1", dtype="str"),
-                p.ColumnSchemaCreate(id="remix_2", dtype="str"),
-                p.ColumnSchemaCreate(id="remix_3", dtype="str"),
+                p.ColumnSchemaCreate(id="linked_product", dtype="str"),
+                p.ColumnSchemaCreate(id="visual_idea", dtype="str"),  # ✅ NEW FIELD
+                p.ColumnSchemaCreate(id="remix_type", dtype="str"),
+                p.ColumnSchemaCreate(id="timestamp", dtype="str"),
             ]
         )
     ), "action", "action-remix-history")

@@ -23,11 +23,13 @@ def transcribe_audio_whisper(audio_path):
     return transcript.text
 
 
-def upload_transcription_to_knowledge(transcription_text: str, title: str, blueprint: str = None):
+def upload_transcription_to_knowledge(transcription_text: str, title: str, blueprint: str = None, table_id: str = None, file_id: str = None):
+
     row = {
         "Title": title,
         "Text": transcription_text,
         "Source": title,
+        "File ID": file_id or str(uuid.uuid4())  # 🔑 required for history view
     }
     if blueprint:
         row["Linked Blueprint"] = blueprint  # ✅ must go here
@@ -35,7 +37,7 @@ def upload_transcription_to_knowledge(transcription_text: str, title: str, bluep
     client.table.add_table_rows(
         "knowledge",
         p.RowAddRequest(
-            table_id="knowledge-digital-products",
+            table_id=table_id or "knowledge-digital-products",
             data=[row],
             stream=False
         )
