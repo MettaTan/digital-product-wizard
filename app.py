@@ -31,21 +31,30 @@ file_map = defaultdict(list)
 # Load environment variables
 load_dotenv()
 
+st.set_page_config(page_title="Digital Product Creator", layout="wide")
+
+@st.fragment
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
+cookies = cookie_manager.get_all(key="auth_restore")
+
 def restore_session_from_cookies():
-    cookies = cookie_manager.get_all(key="restore_cookies")
-    if (
-        cookies and
-        "access_token" in cookies and
-        "refresh_token" in cookies and
-        "user_id" not in st.session_state
-    ):
+    if not cookies:
+        return
+
+    access_token = cookies.get("access_token")
+    refresh_token = cookies.get("refresh_token")
+
+    if access_token and refresh_token and "user_id" not in st.session_state:
         try:
-            supabase.auth.set_session(cookies["access_token"], cookies["refresh_token"])
+            supabase.auth.set_session(access_token, refresh_token)
             user = supabase.auth.get_user()
 
-            if user:
-                st.session_state["access_token"] = cookies["access_token"]
-                st.session_state["refresh_token"] = cookies["refresh_token"]
+            if user and user.user:
+                st.session_state["access_token"] = access_token
+                st.session_state["refresh_token"] = refresh_token
                 st.session_state["user_id"] = user.user.id
                 st.session_state["user_email"] = user.user.email
                 st.session_state["user_name"] = user.user.email.split("@")[0]
@@ -54,36 +63,17 @@ def restore_session_from_cookies():
                 user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
                 st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
 
-                # 👇 Optional: Don't re-run here, just let the state persist naturally
-                # st.rerun()
-        except Exception:
-            # Try refreshing if tokens are expired
-            try:
-                refreshed = supabase.auth.refresh_session()
-                if refreshed.session:
-                    cookie_manager.set("access_token", refreshed.session.access_token, expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="restore_token")
-                    cookie_manager.set("refresh_token", refreshed.session.refresh_token, expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="restore_refresh")
+        except Exception as e:
+            st.warning("⚠️ Failed to restore session: " + str(e))
+            cookie_manager.delete("access_token", key="wipe1")
+            cookie_manager.delete("refresh_token", key="wipe2")
 
-                    st.session_state["access_token"] = refreshed.session.access_token
-                    st.session_state["refresh_token"] = refreshed.session.refresh_token
-                    st.session_state["user_id"] = refreshed.user.id
-                    st.session_state["user_email"] = refreshed.user.email
-                    st.session_state["user_name"] = refreshed.user.email.split("@")[0]
+def logout_user():
+    for key in ["access_token", "refresh_token", "user_id", "user_email", "user_name", "is_paid_user"]:
+        st.session_state.pop(key, None)
 
-                    user_client = get_user_client()
-                    user_record = user_client.table("users").select("paid").eq("id", refreshed.user.id).maybe_single().execute()
-                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-            except:
-                for key in ["access_token", "refresh_token"]:
-                    cookie_manager.delete(key)
-
-# ✅ Must come before calling any JamAI functions
-jamai = JamAI(
-    project_id=os.getenv("JAMAI_PROJECT_ID"),
-    token=os.getenv("JAMAI_API_KEY")
-)
-
-st.set_page_config(page_title="Digital Product Creator", layout="wide")
+    st.session_state["just_logged_out"] = True
+    st.rerun()
 
 def get_user_client():
     token = st.session_state.get("access_token")
@@ -94,19 +84,16 @@ def get_user_client():
     options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
     return create_client(SUPABASE_URL, SUPABASE_KEY, options)
 
-# --- Cookie Manager ---
-@st.fragment
-def get_cookie_manager():
-    return stx.CookieManager()
+# --- Handle logout or restore session ---
+if st.session_state.get("just_logged_out"):
+    st.session_state.pop("just_logged_out")
+    st.success("🔒 You’ve been logged out.")
 
-cookie_manager = get_cookie_manager()
-cookies = cookie_manager.get_all(key="restore_check")
-
-# Wait until cookies are available
-if cookies is None or "access_token" not in cookies:
-    st.stop()
-
-restore_session_from_cookies()
+    # ✅ Cookies MUST be deleted here where the component is rendered
+    cookie_manager.set("access_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_access_token")
+    cookie_manager.set("refresh_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_refresh_token")
+else:
+    restore_session_from_cookies()
 
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
@@ -140,10 +127,10 @@ if "user_id" not in st.session_state:
                     st.session_state["user_email"] = result.user.email
                     st.session_state["user_name"] = result.user.email.split("@")[0]
 
-                    cookie_manager.set("access_token", result.session.access_token, 
-                  expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="set_access_token")
-                    cookie_manager.set("refresh_token", result.session.refresh_token, 
-                                    expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="set_refresh_token")
+                    cookie_manager.set("access_token", result.session.access_token,
+                        expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="set_access_token")
+                    cookie_manager.set("refresh_token", result.session.refresh_token,
+                        expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="set_refresh_token")
 
                     user_client = get_user_client()
                     user_record = user_client.table("users").select("paid").eq("id", result.user.id).maybe_single().execute()
@@ -157,9 +144,18 @@ if "user_id" not in st.session_state:
 
     st.stop()
 
-# --- App Access Gate ---
+# --- Authenticated UI ---
 name = st.session_state.get("user_name", "User")
 is_paid_user = st.session_state.get("is_paid_user", False)
+
+with st.sidebar:
+    st.image("https://your-logo-url.png", use_container_width=True)
+    st.divider()
+    st.markdown(f"👤 **{name}**")
+    st.markdown(f"💼 **{ 'Premium' if is_paid_user else 'Free' }**")
+    st.divider()
+    if st.button("🚪 Log Out"):
+        logout_user()
 
 # --- Main UI ---
 st.title("Digital Product Creator - Audio to Guide")
