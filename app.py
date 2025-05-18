@@ -26,12 +26,56 @@ from supabase import create_client
 from supabase.client import ClientOptions
 from datetime import datetime, timedelta, timezone
 
-
-
 file_map = defaultdict(list)
 
 # Load environment variables
 load_dotenv()
+
+def restore_session_from_cookies():
+    cookies = cookie_manager.get_all(key="restore_cookies")
+    if (
+        cookies and
+        "access_token" in cookies and
+        "refresh_token" in cookies and
+        "user_id" not in st.session_state
+    ):
+        try:
+            supabase.auth.set_session(cookies["access_token"], cookies["refresh_token"])
+            user = supabase.auth.get_user()
+
+            if user:
+                st.session_state["access_token"] = cookies["access_token"]
+                st.session_state["refresh_token"] = cookies["refresh_token"]
+                st.session_state["user_id"] = user.user.id
+                st.session_state["user_email"] = user.user.email
+                st.session_state["user_name"] = user.user.email.split("@")[0]
+
+                user_client = get_user_client()
+                user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
+                st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+
+                # 👇 Optional: Don't re-run here, just let the state persist naturally
+                # st.rerun()
+        except Exception:
+            # Try refreshing if tokens are expired
+            try:
+                refreshed = supabase.auth.refresh_session()
+                if refreshed.session:
+                    cookie_manager.set("access_token", refreshed.session.access_token, expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="restore_token")
+                    cookie_manager.set("refresh_token", refreshed.session.refresh_token, expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="restore_refresh")
+
+                    st.session_state["access_token"] = refreshed.session.access_token
+                    st.session_state["refresh_token"] = refreshed.session.refresh_token
+                    st.session_state["user_id"] = refreshed.user.id
+                    st.session_state["user_email"] = refreshed.user.email
+                    st.session_state["user_name"] = refreshed.user.email.split("@")[0]
+
+                    user_client = get_user_client()
+                    user_record = user_client.table("users").select("paid").eq("id", refreshed.user.id).maybe_single().execute()
+                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+            except:
+                for key in ["access_token", "refresh_token"]:
+                    cookie_manager.delete(key)
 
 # ✅ Must come before calling any JamAI functions
 jamai = JamAI(
@@ -50,60 +94,19 @@ def get_user_client():
     options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
     return create_client(SUPABASE_URL, SUPABASE_KEY, options)
 
-st.write("Session:", {
-    "user_id": st.session_state.get("user_id"),
-    "access_token": st.session_state.get("access_token"),
-    "refresh_token": st.session_state.get("refresh_token"),
-})
-
 # --- Cookie Manager ---
-cookie_manager = stx.CookieManager()
-cookie_resp = cookie_manager.get_all()
+@st.fragment
+def get_cookie_manager():
+    return stx.CookieManager()
 
-# --- Try to restore session from cookies ---
-if (
-    cookie_resp and
-    "access_token" in cookie_resp and
-    "refresh_token" in cookie_resp and
-    "user_id" not in st.session_state
-):
-    try:
-        supabase.auth.set_session(cookie_resp["access_token"], cookie_resp["refresh_token"])
+cookie_manager = get_cookie_manager()
+cookies = cookie_manager.get_all(key="restore_check")
 
-        user = supabase.auth.get_user()
-        if user:
-            st.session_state["access_token"] = cookie_resp["access_token"]
-            st.session_state["refresh_token"] = cookie_resp["refresh_token"]
-            st.session_state["user_id"] = user.user.id
-            st.session_state["user_email"] = user.user.email
-            st.session_state["user_name"] = user.user.email.split("@")[0]
+# Wait until cookies are available
+if cookies is None or "access_token" not in cookies:
+    st.stop()
 
-            user_client = get_user_client()
-            user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
-            st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-
-            st.rerun()
-    except Exception as e:
-        try:
-            refresh_result = supabase.auth.refresh_session()
-            if refresh_result.session:
-                cookie_manager.set("access_token", refresh_result.session.access_token, expires_at=(datetime.now(timezone.utc) + timedelta(days=7)))
-                cookie_manager.set("refresh_token", refresh_result.session.refresh_token, expires_at=(datetime.now(timezone.utc) + timedelta(days=7)))
-
-                st.session_state["access_token"] = refresh_result.session.access_token
-                st.session_state["refresh_token"] = refresh_result.session.refresh_token
-                st.session_state["user_id"] = refresh_result.user.id
-                st.session_state["user_email"] = refresh_result.user.email
-                st.session_state["user_name"] = refresh_result.user.email.split("@")[0]
-
-                user_client = get_user_client()
-                user_record = user_client.table("users").select("paid").eq("id", refresh_result.user.id).maybe_single().execute()
-                st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-
-                st.stop()
-        except Exception:
-            for key in ["access_token", "refresh_token"]:
-                cookie_manager.delete(key)
+restore_session_from_cookies()
 
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
@@ -138,9 +141,9 @@ if "user_id" not in st.session_state:
                     st.session_state["user_name"] = result.user.email.split("@")[0]
 
                     cookie_manager.set("access_token", result.session.access_token, 
-                  expires_at=datetime.now(timezone.utc) + timedelta(days=7))
+                  expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="set_access_token")
                     cookie_manager.set("refresh_token", result.session.refresh_token, 
-                                    expires_at=datetime.now(timezone.utc) + timedelta(days=30))
+                                    expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="set_refresh_token")
 
                     user_client = get_user_client()
                     user_record = user_client.table("users").select("paid").eq("id", result.user.id).maybe_single().execute()
@@ -152,11 +155,6 @@ if "user_id" not in st.session_state:
             except Exception as e:
                 st.error(f"Login error: {e}")
 
-    st.stop()
-
-
-# Prevent access to app until authenticated
-if "user_id" not in st.session_state:
     st.stop()
 
 # --- App Access Gate ---
