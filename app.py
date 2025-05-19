@@ -69,28 +69,6 @@ def get_user_client():
 
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
-# --- Handle Stripe redirect status ---
-query_params = st.query_params
-if "session" in query_params:
-    status = query_params["session"][0]
-
-    if status == "success":
-        st.success("🎉 Payment successful. You've been upgraded to Pro!")
-
-        # Refresh paid status from Supabase
-        user_client = get_user_client()
-        user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
-        st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-
-        # Clean up query string
-        st.query_params.clear()
-        st.rerun()
-
-    elif status == "cancel":
-        st.info("❌ Payment was cancelled.")
-        st.query_params.clear()
-        st.rerun()
-
 @st.fragment
 def get_cookie_manager():
     return stx.CookieManager()
@@ -140,13 +118,28 @@ else:
 # --- Handle post-checkout redirect ---
 query_params = st.query_params
 
-if "session" in query_params and query_params["session"] == "success":
-    st.success("🎉 Payment successful. You've been upgraded to Pro!")
+if "session" in query_params and query_params["session"][0] == "success":
+    # Only refresh paid status if access_token is ready
+    if "access_token" in st.session_state:
+        try:
+            user_client = get_user_client()
+            user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
+            st.session_state["is_paid_user"] = user_record.data.get("paid", False)
+            st.success("🎉 Payment successful. You've been upgraded to Pro!")
+        except Exception as e:
+            st.warning(f"⚠️ Failed to refresh paid status: {e}")
+    else:
+        st.warning("⚠️ Skipped paid status refresh — session not ready yet.")
 
-    # Refresh paid status
-    user_client = get_user_client()
-    user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
-    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+    st.query_params.clear()
+    st.rerun()
+
+elif "session" in query_params and query_params["session"][0] == "cancel":
+    st.info("❌ Payment was cancelled.")
+    st.query_params.clear()
+    st.rerun()
+
+
 
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
