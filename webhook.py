@@ -29,10 +29,19 @@ def stripe_webhook():
     # ✅ Detect successful checkout or subscription creation
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        email = session["customer_email"]
+        email = session.get("customer_email")
 
-        # 🔄 Update user in Supabase
-        supabase.table("users").update({"paid": True}).eq("email", email).execute()
+        if email:
+            supabase.table("users").update({"paid": True}).eq("email", email).execute()
+
+            customer_id = session.get("customer")
+            if customer_id:
+                supabase.table("stripe_customers").upsert({
+                    "id": email,
+                    "stripe_customer_id": customer_id
+                }).execute()
+        else:
+            print("❌ No customer_email found in session object.")
 
     return jsonify(success=True)
 
