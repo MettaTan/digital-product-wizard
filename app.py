@@ -40,13 +40,22 @@ def start_checkout(price_id, mode="payment"):
         mode=mode,
         line_items=[{"price": price_id, "quantity": 1}],
         customer_email=st.session_state["user_email"],
-        success_url="http://localhost:8501?session=success",
-        cancel_url="http://localhost:8501?session=cancel"
+        success_url="https://digital-product-wizard.onrender.com/?session=success",
+        cancel_url="https://digital-product-wizard.onrender.com/?session=cancel"
     )
     st.markdown(f"""<meta http-equiv="refresh" content="0; url={session.url}">""", unsafe_allow_html=True)
     st.stop()
 
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
+
+# --- Handle Stripe redirect status ---
+query_params = st.experimental_get_query_params()
+if "session" in query_params:
+    status = query_params["session"][0]
+    if status == "success":
+        st.success("🎉 Payment successful. You've been upgraded to Pro!")
+    elif status == "cancel":
+        st.info("❌ Payment was cancelled.")
 
 @st.fragment
 def get_cookie_manager():
@@ -182,8 +191,18 @@ with st.sidebar:
     st.image("https://your-logo-url.png", use_container_width=True)
     st.divider()
     st.markdown(f"👤 **{name}**")
-    st.markdown(f"💼 **{ 'Premium' if is_paid_user else 'Free' }**")
+    st.markdown(f"💼 **{'Premium' if is_paid_user else 'Free'}**")
     st.divider()
+
+    if not is_paid_user:
+        st.markdown("### 🔓 Upgrade to Pro")
+        if st.button("💳 $9.99/mo"):
+            start_checkout("price_month", mode="subscription")
+        if st.button("💳 $99/year"):
+            start_checkout("price_annual", mode="subscription")
+        if st.button("🏆 $199 lifetime"):
+            start_checkout("price_lifetime", mode="payment")
+
     if st.button("🚪 Log Out"):
         logout_user()
 
