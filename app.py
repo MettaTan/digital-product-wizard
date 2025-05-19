@@ -25,11 +25,26 @@ from supabase_client import SUPABASE_URL, SUPABASE_KEY
 from supabase import create_client
 from supabase.client import ClientOptions
 from datetime import datetime, timedelta, timezone
+import stripe
 
 file_map = defaultdict(list)
 
 # Load environment variables
 load_dotenv()
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
+def start_checkout(price_id, mode="payment"):
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        mode=mode,
+        line_items=[{"price": price_id, "quantity": 1}],
+        customer_email=st.session_state["user_email"],
+        success_url="http://localhost:8501?session=success",
+        cancel_url="http://localhost:8501?session=cancel"
+    )
+    st.markdown(f"""<meta http-equiv="refresh" content="0; url={session.url}">""", unsafe_allow_html=True)
+    st.stop()
 
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
@@ -147,6 +162,21 @@ if "user_id" not in st.session_state:
 # --- Authenticated UI ---
 name = st.session_state.get("user_name", "User")
 is_paid_user = st.session_state.get("is_paid_user", False)
+
+with st.sidebar:
+    st.divider()
+    if not is_paid_user:
+        st.markdown("### 🔓 Upgrade to Pro")
+
+        if st.button("💳 $9.99/mo"):
+            start_checkout("price_1RItpZ4C6tsP4JlLmzqK9IoP", mode="subscription")
+        if st.button("💳 $99/year"):
+            start_checkout("price_1RQL7E4C6tsP4JlL0psNbSjX", mode="subscription")
+        if st.button("🏆 $199 lifetime"):
+            start_checkout("price_1RQL7E4C6tsP4JlL0H9rzDtO", mode="payment")
+
+        if "checkout_url" in st.session_state:
+            st.markdown(f"[👉 Complete Payment →]({st.session_state['checkout_url']})", unsafe_allow_html=True)
 
 with st.sidebar:
     st.image("https://your-logo-url.png", use_container_width=True)
