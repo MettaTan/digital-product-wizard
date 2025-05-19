@@ -12,4 +12,3 @@ python-slugify
 supabase
 stripe
 extra-streamlit-components
-flask
