@@ -34,6 +34,11 @@ load_dotenv()
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
+jamai = JamAI(
+    project_id=os.getenv("JAMAI_PROJECT_ID"),
+    token=os.getenv("JAMAI_API_KEY")
+)
+
 def start_checkout(price_id, mode="payment"):
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
@@ -46,16 +51,45 @@ def start_checkout(price_id, mode="payment"):
     st.markdown(f"""<meta http-equiv="refresh" content="0; url={session.url}">""", unsafe_allow_html=True)
     st.stop()
 
+def logout_user():
+    for key in ["access_token", "refresh_token", "user_id", "user_email", "user_name", "is_paid_user"]:
+        st.session_state.pop(key, None)
+
+    st.session_state["just_logged_out"] = True
+    st.rerun()
+
+def get_user_client():
+    token = st.session_state.get("access_token")
+    if not token:
+        st.error("Missing auth token.")
+        st.stop()
+
+    options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
+    return create_client(SUPABASE_URL, SUPABASE_KEY, options)
+
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
 
 # --- Handle Stripe redirect status ---
-query_params = st.experimental_get_query_params()
+query_params = st.query_params
 if "session" in query_params:
     status = query_params["session"][0]
+
     if status == "success":
         st.success("🎉 Payment successful. You've been upgraded to Pro!")
+
+        # Refresh paid status from Supabase
+        user_client = get_user_client()
+        user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
+        st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+
+        # Clean up query string
+        st.query_params.clear()
+        st.rerun()
+
     elif status == "cancel":
         st.info("❌ Payment was cancelled.")
+        st.query_params.clear()
+        st.rerun()
 
 @st.fragment
 def get_cookie_manager():
@@ -92,22 +126,6 @@ def restore_session_from_cookies():
             cookie_manager.delete("access_token", key="wipe1")
             cookie_manager.delete("refresh_token", key="wipe2")
 
-def logout_user():
-    for key in ["access_token", "refresh_token", "user_id", "user_email", "user_name", "is_paid_user"]:
-        st.session_state.pop(key, None)
-
-    st.session_state["just_logged_out"] = True
-    st.rerun()
-
-def get_user_client():
-    token = st.session_state.get("access_token")
-    if not token:
-        st.error("Missing auth token.")
-        st.stop()
-
-    options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
-    return create_client(SUPABASE_URL, SUPABASE_KEY, options)
-
 # --- Handle logout or restore session ---
 if st.session_state.get("just_logged_out"):
     st.session_state.pop("just_logged_out")
@@ -129,7 +147,7 @@ if "session" in query_params and query_params["session"] == "success":
     user_client = get_user_client()
     user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
     st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-    
+
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
     st.title("🔐 Log In or Sign Up")
@@ -184,21 +202,6 @@ name = st.session_state.get("user_name", "User")
 is_paid_user = st.session_state.get("is_paid_user", False)
 
 with st.sidebar:
-    st.divider()
-    if not is_paid_user:
-        st.markdown("### 🔓 Upgrade to Pro")
-
-        if st.button("💳 $9.99/mo"):
-            start_checkout("price_1RItpZ4C6tsP4JlLmzqK9IoP", mode="subscription")
-        if st.button("💳 $99/year"):
-            start_checkout("price_1RQL7E4C6tsP4JlL0psNbSjX", mode="subscription")
-        if st.button("🏆 $199 lifetime"):
-            start_checkout("price_1RQL7E4C6tsP4JlL0H9rzDtO", mode="payment")
-
-        if "checkout_url" in st.session_state:
-            st.markdown(f"[👉 Complete Payment →]({st.session_state['checkout_url']})", unsafe_allow_html=True)
-
-with st.sidebar:
     st.image("https://your-logo-url.png", use_container_width=True)
     st.divider()
     st.markdown(f"👤 **{name}**")
@@ -208,13 +211,13 @@ with st.sidebar:
     if not is_paid_user:
         st.markdown("### 🔓 Upgrade to Pro")
         if st.button("💳 $9.99/mo", key="btn_monthly"):
-            start_checkout("price_month", mode="subscription")
+            start_checkout("price_1RItpZ4C6tsP4JlLmzqK9IoP", mode="subscription")
 
         if st.button("💳 $99/year", key="btn_yearly"):
-            start_checkout("price_annual", mode="subscription")
+            start_checkout("price_1RQL7E4C6tsP4JlL0psNbSjX", mode="subscription")
 
         if st.button("🏆 $199 lifetime", key="btn_lifetime"):
-            start_checkout("price_lifetime", mode="payment")
+            start_checkout("price_1RQL7E4C6tsP4JlL0H9rzDtO", mode="payment")
 
     if st.button("🚪 Log Out"):
         logout_user()
