@@ -119,6 +119,17 @@ if st.session_state.get("just_logged_out"):
 else:
     restore_session_from_cookies()
 
+# --- Handle post-checkout redirect ---
+query_params = st.query_params
+
+if "session" in query_params and query_params["session"] == "success":
+    st.success("🎉 Payment successful. You've been upgraded to Pro!")
+
+    # Refresh paid status
+    user_client = get_user_client()
+    user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
+    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+    
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
     st.title("🔐 Log In or Sign Up")
@@ -196,11 +207,13 @@ with st.sidebar:
 
     if not is_paid_user:
         st.markdown("### 🔓 Upgrade to Pro")
-        if st.button("💳 $9.99/mo"):
+        if st.button("💳 $9.99/mo", key="btn_monthly"):
             start_checkout("price_month", mode="subscription")
-        if st.button("💳 $99/year"):
+
+        if st.button("💳 $99/year", key="btn_yearly"):
             start_checkout("price_annual", mode="subscription")
-        if st.button("🏆 $199 lifetime"):
+
+        if st.button("🏆 $199 lifetime", key="btn_lifetime"):
             start_checkout("price_lifetime", mode="payment")
 
     if st.button("🚪 Log Out"):
