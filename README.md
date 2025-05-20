@@ -86,11 +86,61 @@ brew install ffmpeg tesseract
 sudo apt update && sudo apt install ffmpeg tesseract-ocr
 ```
 
+
+### 4.5 Set Up Supabase CLI and Docker (for Stripe Webhook)
+
+To deploy the Stripe webhook to Supabase Edge Functions, you’ll need:
+
+- ✅ [Supabase CLI](https://github.com/supabase/cli)
+- ✅ [Docker Desktop](https://www.docker.com/products/docker-desktop) (for function bundling)
+
+#### 🪟 Windows
+
+1. **Download Supabase CLI binary**:
+   - Go to: [https://github.com/supabase/cli/releases/latest](https://github.com/supabase/cli/releases/latest)
+   - Download `supabase-windows-x64.exe`
+   - Rename it to `supabase.exe`
+   - Move it to a folder in your `PATH` (e.g., `C:\Program Files\Supabase\`)
+   - Add that folder to your System `PATH`:
+     - Search "Environment Variables" → Edit `Path` → Add: `C:\Program Files\Supabase\`
+
+2. **Install Docker Desktop**:
+   - Download: [https://www.docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)
+   - Install with WSL2 backend if prompted
+   - Start Docker Desktop (wait for the whale icon to appear)
+
+3. **Verify setup**:
+   - Open a new terminal
+   - Run: `supabase --version` (should return CLI version)
+   - Run: `docker --version` (should return Docker version)
+
+#### 🌞 macOS
+
+```bash
+brew install deno
+brew install supabase/tap/supabase
+brew install --cask docker
+```
+
+> Open Docker Desktop after install and ensure it’s running.
+
 ### 5. Run the Script
 
 ```
 python script.py
 ```
+
+
+### 5. Deploy the Stripe Webhook
+
+In your project folder:
+
+```bash
+supabase login
+supabase functions deploy stripe-webhook
+```
+
+> ✅ Once deployed, your webhook will live on Supabase’s servers and run 24/7 — even if your laptop is offline.
 
 ### 6. Run the App
 
