@@ -39,6 +39,94 @@ jamai = JamAI(
     token=os.getenv("JAMAI_API_KEY")
 )
 
+# ===== HELPER FUNCTIONS =====
+
+def normalize_paid_status(value):
+    """Normalize the paid status value to a boolean, regardless of input type."""
+    if value is None:
+        return False
+    
+    # Handle different data types
+    if isinstance(value, bool):
+        return value
+    elif isinstance(value, str):
+        return value.lower() in ('true', 't', 'yes', 'y', '1')
+    elif isinstance(value, (int, float)):
+        return value > 0
+    else:
+        # Default for any other type
+        return bool(value)
+
+def debug_print_session():
+    """Print debug info about the current session."""
+    if not st.session_state.get("debug_mode", False):
+        return
+        
+    print("===== DEBUG SESSION INFO =====")
+    print(f"User ID: {st.session_state.get('user_id')}")
+    print(f"is_paid_user in session: {st.session_state.get('is_paid_user')}")
+    
+    # Try to fetch the current status directly from DB
+    if 'user_id' in st.session_state and 'access_token' in st.session_state:
+        try:
+            user_client = get_user_client()
+            user_record = user_client.table("users").select("*").eq("id", st.session_state["user_id"]).maybe_single().execute()
+            print(f"Direct DB query result: {user_record}")
+            if user_record and hasattr(user_record, 'data') and user_record.data:
+                print(f"User record data: {user_record.data}")
+                print(f"'paid' in user_record.data: {'paid' in user_record.data}")
+                if 'paid' in user_record.data:
+                    print(f"paid value: {user_record.data['paid']}")
+                    print(f"paid type: {type(user_record.data['paid'])}")
+        except Exception as e:
+            print(f"Error fetching direct status: {e}")
+    print("==============================")
+
+def update_paid_status_from_db(user_id, print_debug=False):
+    """Fetch the latest paid status from the database and update the session state."""
+    if not user_id:
+        if print_debug:
+            print("No user_id provided to update_paid_status_from_db")
+        return False
+    
+    try:
+        user_client = get_user_client()
+        user_record = user_client.table("users").select("*").eq("id", user_id).maybe_single().execute()
+        
+        if print_debug:
+            print(f"DB response for paid status: {user_record}")
+        
+        # Get paid status with proper type normalization
+        if user_record and hasattr(user_record, 'data') and user_record.data:
+            # Try multiple possible field names
+            for field in ['paid', 'is_paid', 'premium', 'is_premium']:
+                if field in user_record.data:
+                    paid_value = user_record.data[field]
+                    normalized_paid = normalize_paid_status(paid_value)
+                    
+                    if print_debug:
+                        print(f"Found field '{field}' with value: {paid_value} (type: {type(paid_value).__name__})")
+                        print(f"Normalized to: {normalized_paid}")
+                    
+                    # Update session state
+                    st.session_state["is_paid_user"] = normalized_paid
+                    return normalized_paid
+            
+            if print_debug:
+                print("No paid status field found in user record")
+                print(f"Available fields: {list(user_record.data.keys())}")
+                
+            return False
+        else:
+            if print_debug:
+                print("No valid user record data returned")
+            return False
+    
+    except Exception as e:
+        if print_debug:
+            print(f"Error updating paid status: {e}")
+        return False
+
 def start_checkout(price_id, mode="payment"):
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
@@ -67,7 +155,13 @@ def get_user_client():
     options = ClientOptions(headers={"Authorization": f"Bearer {token}"})
     return create_client(SUPABASE_URL, SUPABASE_KEY, options)
 
+# ===== PAGE SETUP =====
+
 st.set_page_config(page_title="Digital Product Creator", layout="wide")
+
+# Enable debug mode if query param is present
+if "debug" in st.query_params:
+    st.session_state["debug_mode"] = True
 
 @st.fragment
 def get_cookie_manager():
@@ -75,6 +169,8 @@ def get_cookie_manager():
 
 cookie_manager = get_cookie_manager()
 cookies = cookie_manager.get_all(key="auth_restore")
+
+# ===== SESSION MANAGEMENT =====
 
 def restore_session_from_cookies():
     if not cookies:
@@ -99,10 +195,8 @@ def restore_session_from_cookies():
                     st.session_state["user_email"] = user.user.email
                     st.session_state["user_name"] = user.user.email.split("@")[0]
 
-                    # Always fetch fresh paid status from database
-                    user_client = get_user_client()
-                    user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
-                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+                    # Always fetch fresh paid status from database using the improved function
+                    update_paid_status_from_db(user.user.id, print_debug=st.session_state.get("debug_mode", False))
                     
             except Exception:
                 # Token expired - try to refresh
@@ -117,37 +211,38 @@ def restore_session_from_cookies():
                         st.session_state["user_email"] = refresh_result.user.email
                         st.session_state["user_name"] = refresh_result.user.email.split("@")[0]
                         
-                        # Update cookies with new tokens - THIS IS THE PROBLEMATIC PART
+                        # Update cookies with new tokens
                         cookie_manager.set("access_token", refresh_result.session.access_token, 
                                           expires_at=datetime.now(timezone.utc) + timedelta(days=7))
                         cookie_manager.set("refresh_token", refresh_result.session.refresh_token, 
                                           expires_at=datetime.now(timezone.utc) + timedelta(days=7))
                         
-                        # Get fresh paid status
-                        user_client = get_user_client()
-                        user_record = user_client.table("users").select("paid").eq("id", refresh_result.user.id).maybe_single().execute()
-                        st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+                        # Get fresh paid status with the improved function
+                        update_paid_status_from_db(refresh_result.user.id, print_debug=st.session_state.get("debug_mode", False))
                     
                 except Exception as refresh_error:
-                    st.warning(f"⚠️ Failed to refresh session: {refresh_error}")
+                    if st.session_state.get("debug_mode", False):
+                        print(f"⚠️ Failed to refresh session: {refresh_error}")
                     cookie_manager.delete("access_token")
                     cookie_manager.delete("refresh_token")
 
         except Exception as e:
-            st.warning("⚠️ Failed to restore session: " + str(e))
+            if st.session_state.get("debug_mode", False):
+                print(f"⚠️ Failed to restore session: {e}")
             cookie_manager.delete("access_token")
             cookie_manager.delete("refresh_token")
 
 # --- Handle logout or restore session ---
 if st.session_state.get("just_logged_out"):
     st.session_state.pop("just_logged_out")
-    st.success("🔒 You’ve been logged out.")
+    st.success("🔒 You've been logged out.")
 
     # ✅ Cookies MUST be deleted here where the component is rendered
     cookie_manager.set("access_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_access_token")
     cookie_manager.set("refresh_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_refresh_token")
 else:
     restore_session_from_cookies()
+    debug_print_session()  # Debug print after session restoration
 
 # --- Handle post-checkout redirect ---
 query_params = st.query_params
@@ -159,17 +254,16 @@ if "session" in query_params and query_params["session"][0] == "success":
             # Try up to 3 times with a short delay between attempts
             max_attempts = 3
             for attempt in range(max_attempts):
-                user_client = get_user_client()
-                user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
+                # Use the improved function to check paid status
+                paid_status = update_paid_status_from_db(st.session_state["user_id"], 
+                                                        print_debug=st.session_state.get("debug_mode", False))
                 
                 # Check if paid status is True
-                if user_record.data and user_record.data.get("paid", False):
-                    st.session_state["is_paid_user"] = True
+                if paid_status:
                     st.success("🎉 Payment successful. You've been upgraded to Pro!")
                     break
                 elif attempt < max_attempts - 1:
                     # Wait 2 seconds between attempts
-                    import time
                     time.sleep(2)
                     st.info(f"Checking payment status... ({attempt+1}/{max_attempts})")
                 else:
@@ -187,8 +281,6 @@ elif "session" in query_params and query_params["session"][0] == "cancel":
     st.info("❌ Payment was cancelled.")
     st.query_params.clear()
     st.rerun()
-
-
 
 # --- Auth UI (Login + Signup) ---
 if "user_id" not in st.session_state:
@@ -222,15 +314,18 @@ if "user_id" not in st.session_state:
                     st.session_state["user_email"] = result.user.email
                     st.session_state["user_name"] = result.user.email.split("@")[0]
 
+                    # Set cookies (fixed to not use isoformat)
                     cookie_manager.set("access_token", result.session.access_token,
                         expires_at=datetime.now(timezone.utc) + timedelta(days=7), key="set_access_token")
                     cookie_manager.set("refresh_token", result.session.refresh_token,
                         expires_at=datetime.now(timezone.utc) + timedelta(days=30), key="set_refresh_token")
 
-                    user_client = get_user_client()
-                    user_record = user_client.table("users").select("paid").eq("id", result.user.id).maybe_single().execute()
-                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
-
+                    # Use the improved function to get paid status
+                    update_paid_status_from_db(result.user.id, print_debug=st.session_state.get("debug_mode", False))
+                    
+                    # Debug print after login
+                    debug_print_session()
+                    
                     st.rerun()
                 else:
                     st.error("❌ Invalid credentials or email not confirmed.")
@@ -267,6 +362,110 @@ with st.sidebar:
 # --- Main UI ---
 st.title("Digital Product Creator - Audio to Guide")
 st.success(f"Welcome {name}! Your paid status: {'Premium' if is_paid_user else 'Free'}")
+
+# --- Debug UI ---
+if "user_id" in st.session_state:
+    with st.expander("🔍 Debug Information (Remove in Production)", expanded=st.session_state.get("debug_mode", False)):
+        st.write("### Session State")
+        safe_session = {k: v for k, v in st.session_state.items() 
+                      if k not in ("access_token", "refresh_token")}
+        st.json(safe_session)
+        
+        st.write("### Direct Database Query")
+        try:
+            user_client = get_user_client()
+            user_record = user_client.table("users").select("*").eq("id", st.session_state["user_id"]).maybe_single().execute()
+            
+            if user_record and hasattr(user_record, 'data') and user_record.data:
+                st.json(user_record.data)
+                
+                st.write("### Paid Status Analysis")
+                if 'paid' in user_record.data:
+                    db_paid = user_record.data['paid']
+                    session_paid = st.session_state.get('is_paid_user', False)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("DB Paid Status", str(db_paid))
+                        st.write(f"Type: {type(db_paid).__name__}")
+                    with col2:
+                        st.metric("Session Paid Status", str(session_paid))
+                        st.write(f"Type: {type(session_paid).__name__}")
+                        
+                    if db_paid and not session_paid:
+                        st.error("⚠️ Database shows paid but session doesn't!")
+                        if st.button("Force Update Session"):
+                            st.session_state["is_paid_user"] = True
+                            st.rerun()
+                else:
+                    st.warning("No 'paid' field found in user record")
+                    available_fields = list(user_record.data.keys())
+                    st.write(f"Available fields: {available_fields}")
+                    
+                    # Look for alternative paid fields
+                    for field in ['is_paid', 'premium', 'is_premium']:
+                        if field in user_record.data:
+                            st.info(f"Found possible alternative field: '{field}' with value: {user_record.data[field]}")
+            else:
+                st.error("Failed to get user record from database")
+        except Exception as e:
+            st.error(f"Error querying database: {e}")
+
+# --- Full Debug Tools (only visible with ?debug=true in URL) ---
+if st.session_state.get("debug_mode", False):
+    st.markdown("---")
+    st.write("## 🛠️ Debug Tools")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("Force Refresh Paid Status"):
+            update_paid_status_from_db(st.session_state.get("user_id"), print_debug=True)
+            st.rerun()
+    
+    with col2:
+        if st.button("Force Set Paid = True"):
+            st.session_state["is_paid_user"] = True
+            st.rerun()
+            
+    with col3:
+        if st.button("Force Set Paid = False"):
+            st.session_state["is_paid_user"] = False
+            st.rerun()
+            
+    st.write("### Database Check")
+    if st.button("Check Database Directly"):
+        try:
+            user_client = get_user_client()
+            
+            # Check user record
+            user_id = st.session_state.get("user_id")
+            user_email = st.session_state.get("user_email")
+            
+            if user_id:
+                user_record = user_client.table("users").select("*").eq("id", user_id).maybe_single().execute()
+                st.write("User Record by ID:")
+                st.json(user_record.data if hasattr(user_record, 'data') else None)
+            
+            if user_email:
+                email_record = user_client.table("users").select("*").eq("email", user_email).maybe_single().execute()
+                st.write("User Record by Email:")
+                st.json(email_record.data if hasattr(email_record, 'data') else None)
+                
+            # Check stripe customers table
+            if user_email:
+                stripe_record = user_client.table("stripe_customers").select("*").eq("id", user_email).maybe_single().execute()
+                st.write("Stripe Customer Record:")
+                st.json(stripe_record.data if hasattr(stripe_record, 'data') else None)
+        except Exception as e:
+            st.error(f"Database error: {e}")
+            
+    # Session State Viewer
+    with st.expander("View Full Session State"):
+        # Show all session state except tokens
+        safe_state = {k: v for k, v in st.session_state.items() 
+                     if k not in ('access_token', 'refresh_token')}
+        st.json(safe_state)
 
 # Rest of your application...
 if "audio_upload_count" not in st.session_state:
