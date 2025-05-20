@@ -128,16 +128,40 @@ def update_paid_status_from_db(user_id, print_debug=False):
         return False
 
 def start_checkout(price_id, mode="payment"):
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        mode=mode,
-        line_items=[{"price": price_id, "quantity": 1}],
-        customer_email=st.session_state["user_email"],
-        success_url="https://digital-product-wizard.onrender.com/?session=success",
-        cancel_url="https://digital-product-wizard.onrender.com/?session=cancel"
-    )
-    st.markdown(f"""<meta http-equiv="refresh" content="0; url={session.url}">""", unsafe_allow_html=True)
-    st.stop()
+    """Start a Stripe checkout session with customer email to ensure proper identification."""
+    
+    # Get the current user's email from session state
+    user_email = st.session_state.get("user_email")
+    
+    if not user_email:
+        st.error("❌ User email not found in session. Please log in again.")
+        return
+    
+    # Print debug info if in debug mode
+    if st.session_state.get("debug_mode"):
+        print(f"Starting checkout for email: {user_email}, price: {price_id}, mode: {mode}")
+    
+    try:
+        # Create the checkout session with customer email
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode=mode,
+            line_items=[{"price": price_id, "quantity": 1}],
+            customer_email=user_email,  # Ensure this is correctly passed
+            success_url="https://digital-product-wizard.onrender.com/?session=success",
+            cancel_url="https://digital-product-wizard.onrender.com/?session=cancel"
+        )
+        
+        if st.session_state.get("debug_mode"):
+            print(f"Created checkout session: {session.id}, URL: {session.url}")
+        
+        # Redirect to Stripe checkout
+        st.markdown(f"""<meta http-equiv="refresh" content="0; url={session.url}">""", unsafe_allow_html=True)
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Failed to create checkout session: {e}")
+        if st.session_state.get("debug_mode"):
+            print(f"Checkout error: {e}")
 
 def logout_user():
     for key in ["access_token", "refresh_token", "user_id", "user_email", "user_name", "is_paid_user"]:
@@ -366,6 +390,52 @@ with st.sidebar:
 
     if st.button("🚪 Log Out"):
         logout_user()
+
+    st.divider()
+    st.subheader("🔧 Debug Tools")
+    
+    if st.button("Check Paid Status"):
+        with st.spinner("Checking paid status..."):
+            # Force refresh paid status from DB
+            old_status = st.session_state.get("is_paid_user", False)
+            new_status = update_paid_status_from_db(st.session_state["user_id"], print_debug=True)
+            
+            if new_status:
+                st.success(f"✅ User has premium status!")
+                if not old_status:
+                    st.info("Status was updated from Free to Premium")
+            else:
+                st.warning("⚠️ User has free status")
+    
+    if st.button("Check Stripe Data"):
+        with st.spinner("Checking Stripe data..."):
+            try:
+                user_id = st.session_state.get("user_id")
+                user_client = get_user_client()
+                
+                # Check if user entry exists and has paid=true
+                user_record = user_client.table("users").select("*").eq("id", user_id).maybe_single().execute()
+                
+                # Check if stripe_customers record exists
+                stripe_record = user_client.table("stripe_customers").select("*").eq("id", user_id).maybe_single().execute()
+                
+                # Display results
+                st.text("User Record:")
+                st.json(user_record.data if user_record and user_record.data else {})
+                
+                st.text("Stripe Customer Record:")
+                st.json(stripe_record.data if stripe_record and stripe_record.data else {})
+                
+            except Exception as e:
+                st.error(f"Error checking data: {e}")
+                
+    if st.button("Clear Session Cache"):
+        # Keep only the debug_mode flag
+        debug_mode = st.session_state.get("debug_mode", False)
+        st.session_state.clear()
+        st.session_state["debug_mode"] = debug_mode
+        st.info("Session cache cleared!")
+        st.rerun()
 
 # --- Main UI ---
 st.title("Digital Product Creator - Audio to Guide")
