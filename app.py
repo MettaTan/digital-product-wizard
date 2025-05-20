@@ -172,6 +172,7 @@ cookies = cookie_manager.get_all(key="auth_restore")
 
 # ===== SESSION MANAGEMENT =====
 
+# Update your restore_session_from_cookies function to use unique keys for cookie deletion
 def restore_session_from_cookies():
     if not cookies:
         return
@@ -195,8 +196,10 @@ def restore_session_from_cookies():
                     st.session_state["user_email"] = user.user.email
                     st.session_state["user_name"] = user.user.email.split("@")[0]
 
-                    # Always fetch fresh paid status from database using the improved function
-                    update_paid_status_from_db(user.user.id, print_debug=st.session_state.get("debug_mode", False))
+                    # Get paid status
+                    user_client = get_user_client()
+                    user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
+                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
                     
             except Exception:
                 # Token expired - try to refresh
@@ -217,32 +220,37 @@ def restore_session_from_cookies():
                         cookie_manager.set("refresh_token", refresh_result.session.refresh_token, 
                                           expires_at=datetime.now(timezone.utc) + timedelta(days=7))
                         
-                        # Get fresh paid status with the improved function
-                        update_paid_status_from_db(refresh_result.user.id, print_debug=st.session_state.get("debug_mode", False))
+                        # Get fresh paid status
+                        user_client = get_user_client()
+                        user_record = user_client.table("users").select("paid").eq("id", refresh_result.user.id).maybe_single().execute()
+                        st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
                     
                 except Exception as refresh_error:
-                    if st.session_state.get("debug_mode", False):
-                        print(f"⚠️ Failed to refresh session: {refresh_error}")
-                    cookie_manager.delete("access_token")
-                    cookie_manager.delete("refresh_token")
+                    st.warning(f"⚠️ Failed to refresh session: {refresh_error}")
+                    # Use unique keys for each cookie deletion
+                    cookie_manager.delete("access_token", key="delete_access_token_refresh_failed")
+                    cookie_manager.delete("refresh_token", key="delete_refresh_token_refresh_failed")
 
         except Exception as e:
-            if st.session_state.get("debug_mode", False):
-                print(f"⚠️ Failed to restore session: {e}")
-            cookie_manager.delete("access_token")
-            cookie_manager.delete("refresh_token")
+            st.warning("⚠️ Failed to restore session: " + str(e))
+            # Use unique keys for each cookie deletion
+            cookie_manager.delete("access_token", key="delete_access_token_restore_failed")
+            cookie_manager.delete("refresh_token", key="delete_refresh_token_restore_failed")
 
-# --- Handle logout or restore session ---
+# Update your logout handling with unique keys
 if st.session_state.get("just_logged_out"):
     st.session_state.pop("just_logged_out")
     st.success("🔒 You've been logged out.")
 
-    # ✅ Cookies MUST be deleted here where the component is rendered
-    cookie_manager.set("access_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_access_token")
-    cookie_manager.set("refresh_token", "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key="expire_refresh_token")
+    # Use unique keys when deleting/expiring cookies
+    cookie_manager.set("access_token", "", 
+                      expires_at=datetime.now(timezone.utc) - timedelta(days=1), 
+                      key="expire_access_token_logout")
+    cookie_manager.set("refresh_token", "", 
+                      expires_at=datetime.now(timezone.utc) - timedelta(days=1), 
+                      key="expire_refresh_token_logout")
 else:
     restore_session_from_cookies()
-    debug_print_session()  # Debug print after session restoration
 
 # --- Handle post-checkout redirect ---
 query_params = st.query_params
