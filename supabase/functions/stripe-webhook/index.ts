@@ -51,16 +51,64 @@ serve(async (req) => {
     const email = session.customer_email;
     const customer_id = session.customer;
 
-    if (email) {
-      // ✅ Update users.paid = true
-      await supabase.from("users").update({ paid: true }).eq("email", email);
+    console.log(
+      `✅ Processing checkout for email: ${email}, customer: ${customer_id}`
+    );
 
-      // ✅ Upsert into stripe_customers
-      if (customer_id) {
-        await supabase.from("stripe_customers").upsert({
-          id: email, // Or user_id if you prefer
-          stripe_customer_id: customer_id,
-        });
+    if (email) {
+      try {
+        // 1. First, get the user_id from the users table using email
+        const { data: userData, error: userError } = await supabase
+          .from("users")
+          .select("id")
+          .eq("email", email)
+          .single();
+
+        if (userError) {
+          console.error("❌ Error finding user by email:", userError);
+        } else if (!userData) {
+          console.error("❌ No user found with email:", email);
+        } else {
+          console.log("✅ Found user with id:", userData.id);
+
+          // 2. Update user's paid status
+          const { error: updateError } = await supabase
+            .from("users")
+            .update({ paid: true })
+            .eq("id", userData.id);
+
+          if (updateError) {
+            console.error("❌ Error updating paid status:", updateError);
+          } else {
+            console.log("✅ Updated paid status for user:", userData.id);
+          }
+
+          // 3. Upsert into stripe_customers using the user's UUID
+          if (customer_id) {
+            const { error: customerError } = await supabase
+              .from("stripe_customers")
+              .upsert({
+                id: userData.id, // Use the UUID from users table
+                stripe_customer_id: customer_id,
+              });
+
+            if (customerError) {
+              console.error(
+                "❌ Error upserting stripe_customer:",
+                customerError
+              );
+            } else {
+              console.log(
+                "✅ Saved Stripe customer data for user:",
+                userData.id
+              );
+            }
+          } else {
+            console.warn("⚠️ No customer_id found in session");
+          }
+        }
+      } catch (error) {
+        console.error("❌ Unexpected error processing checkout:", error);
       }
     } else {
       console.warn("❌ No customer_email found in session");
