@@ -370,6 +370,7 @@ if "user_id" not in st.session_state:
 name = st.session_state.get("user_name", "User")
 is_paid_user = st.session_state.get("is_paid_user", False)
 
+
 with st.sidebar:
     st.image("https://your-logo-url.png", use_container_width=True)
     st.divider()
@@ -428,6 +429,40 @@ with st.sidebar:
                 
             except Exception as e:
                 st.error(f"Error checking data: {e}")
+    
+    # Add this new button for direct insert testing
+    if st.button("Try Direct Insert to Stripe Customers"):
+        with st.spinner("Attempting direct insert..."):
+            try:
+                import time
+                user_id = st.session_state.get("user_id")
+                if not user_id:
+                    st.error("No user ID in session")
+                else:
+                    test_customer_id = f"cus_test_{int(time.time())}"
+                    
+                    user_client = get_user_client()
+                    
+                    # Try direct insert
+                    result = user_client.table("stripe_customers").insert({
+                        "id": user_id,
+                        "stripe_customer_id": test_customer_id
+                    }).execute()
+                    
+                    if hasattr(result, 'error') and result.error:
+                        st.error(f"Insert failed: {result.error}")
+                        st.code(str(result.error))
+                    else:
+                        st.success(f"Test record inserted successfully!")
+                        st.json(result.data)
+                        
+                        # Check if we can retrieve it
+                        check_result = user_client.table("stripe_customers").select("*").eq("id", user_id).maybe_single().execute()
+                        st.write("Retrieved record:")
+                        st.json(check_result.data if check_result and hasattr(check_result, 'data') else {})
+            except Exception as e:
+                st.error(f"Error during direct insert: {e}")
+                st.code(str(e))
                 
     if st.button("Clear Session Cache"):
         # Keep only the debug_mode flag
