@@ -85,24 +85,58 @@ def restore_session_from_cookies():
 
     if access_token and refresh_token and "user_id" not in st.session_state:
         try:
+            # Try to use the stored tokens
             supabase.auth.set_session(access_token, refresh_token)
-            user = supabase.auth.get_user()
+            
+            try:
+                # Try to get user info - if this fails, tokens might be expired
+                user = supabase.auth.get_user()
+                
+                if user and user.user:
+                    st.session_state["access_token"] = access_token
+                    st.session_state["refresh_token"] = refresh_token
+                    st.session_state["user_id"] = user.user.id
+                    st.session_state["user_email"] = user.user.email
+                    st.session_state["user_name"] = user.user.email.split("@")[0]
 
-            if user and user.user:
-                st.session_state["access_token"] = access_token
-                st.session_state["refresh_token"] = refresh_token
-                st.session_state["user_id"] = user.user.id
-                st.session_state["user_email"] = user.user.email
-                st.session_state["user_name"] = user.user.email.split("@")[0]
-
-                user_client = get_user_client()
-                user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
-                st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+                    # Always fetch fresh paid status from database
+                    user_client = get_user_client()
+                    user_record = user_client.table("users").select("paid").eq("id", user.user.id).maybe_single().execute()
+                    st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+                    
+            except Exception:
+                # Token expired - try to refresh
+                try:
+                    refresh_result = supabase.auth.refresh_session(refresh_token)
+                    
+                    if refresh_result and refresh_result.session:
+                        # Update session state
+                        st.session_state["access_token"] = refresh_result.session.access_token
+                        st.session_state["refresh_token"] = refresh_result.session.refresh_token
+                        st.session_state["user_id"] = refresh_result.user.id
+                        st.session_state["user_email"] = refresh_result.user.email
+                        st.session_state["user_name"] = refresh_result.user.email.split("@")[0]
+                        
+                        # Update cookies with new tokens - THIS IS THE PROBLEMATIC PART
+                        cookie_manager.set("access_token", refresh_result.session.access_token, 
+                                          expires_at=datetime.now(timezone.utc) + timedelta(days=7))
+                        cookie_manager.set("refresh_token", refresh_result.session.refresh_token, 
+                                          expires_at=datetime.now(timezone.utc) + timedelta(days=7))
+                        
+                        # Get fresh paid status
+                        user_client = get_user_client()
+                        user_record = user_client.table("users").select("paid").eq("id", refresh_result.user.id).maybe_single().execute()
+                        st.session_state["is_paid_user"] = user_record.data.get("paid", False) if user_record and user_record.data else False
+                    
+                except Exception as refresh_error:
+                    st.warning(f"⚠️ Failed to refresh session: {refresh_error}")
+                    cookie_manager.delete("access_token")
+                    cookie_manager.delete("refresh_token")
 
         except Exception as e:
             st.warning("⚠️ Failed to restore session: " + str(e))
-            cookie_manager.delete("access_token", key="wipe1")
-            cookie_manager.delete("refresh_token", key="wipe2")
+            cookie_manager.delete("access_token")
+            cookie_manager.delete("refresh_token")
 
 # --- Handle logout or restore session ---
 if st.session_state.get("just_logged_out"):
@@ -122,10 +156,25 @@ if "session" in query_params and query_params["session"][0] == "success":
     # Only refresh paid status if access_token is ready
     if "access_token" in st.session_state:
         try:
-            user_client = get_user_client()
-            user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
-            st.session_state["is_paid_user"] = user_record.data.get("paid", False)
-            st.success("🎉 Payment successful. You've been upgraded to Pro!")
+            # Try up to 3 times with a short delay between attempts
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                user_client = get_user_client()
+                user_record = user_client.table("users").select("paid").eq("id", st.session_state["user_id"]).maybe_single().execute()
+                
+                # Check if paid status is True
+                if user_record.data and user_record.data.get("paid", False):
+                    st.session_state["is_paid_user"] = True
+                    st.success("🎉 Payment successful. You've been upgraded to Pro!")
+                    break
+                elif attempt < max_attempts - 1:
+                    # Wait 2 seconds between attempts
+                    import time
+                    time.sleep(2)
+                    st.info(f"Checking payment status... ({attempt+1}/{max_attempts})")
+                else:
+                    # Final attempt failed
+                    st.warning("⚠️ Payment recorded but status not updated yet. Please refresh in a moment.")
         except Exception as e:
             st.warning(f"⚠️ Failed to refresh paid status: {e}")
     else:
