@@ -21,12 +21,26 @@ const stripe = new Stripe(stripeSecret, {
 });
 
 serve(async (req) => {
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  console.log("🔍 SUPABASE_URL:", Deno.env.get("SUPABASE_URL"));
+  console.log(
+    "🔍 SERVICE_ROLE_KEY:",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.slice(0, 8)
+  ); // don't log full key
+
   const sig = req.headers.get("stripe-signature");
   const body = await req.text();
 
   let event;
   try {
-    event = stripe.webhooks.constructEvent(body, sig!, endpointSecret);
+    event = await stripe.webhooks.constructEventAsync(
+      body,
+      sig!,
+      endpointSecret
+    );
   } catch (err) {
     console.error("❌ Webhook signature verification failed:", err);
     return new Response("Webhook Error", { status: 400 });
