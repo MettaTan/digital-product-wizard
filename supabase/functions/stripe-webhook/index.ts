@@ -1,11 +1,10 @@
-// Supabase Edge Function: stripe-webhook
-// Replace Flask completely
-
-// Supabase Edge Function: stripe-webhook
-// Full updated implementation with robust error handling
+// Simple diagnostic webhook with explicit error logging
 
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// For logging context
+const WEBHOOK_VERSION = "diagnostic-v1";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -21,26 +20,169 @@ const stripe = new Stripe(stripeSecret, {
   httpClient: Stripe.createFetchHttpClient(),
 });
 
+// Test endpoint for direct insertion testing
 serve(async (req) => {
-  console.log("⚡ WEBHOOK RECEIVED at " + new Date().toISOString());
-  console.log("📨 Request method:", req.method);
+  console.log(
+    `🚀 [${WEBHOOK_VERSION}] Request received: ${new Date().toISOString()}`
+  );
+
+  // Handle test endpoint
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+
+    if (url.pathname.includes("/test-insert")) {
+      const userId = url.searchParams.get("user_id");
+      const customerId =
+        url.searchParams.get("customer_id") || `cus_test_${Date.now()}`;
+
+      if (!userId) {
+        return new Response(
+          JSON.stringify({ error: "Missing user_id parameter" }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      console.log(`🧪 Test insertion request for user ${userId}`);
+
+      try {
+        // First, check if RLS is enabled on the table
+        const { data: rlsData, error: rlsError } = await supabase.rpc(
+          "check_rls_enabled",
+          {
+            table_name: "stripe_customers",
+          }
+        );
+
+        console.log(`🔒 RLS check result:`, rlsData, rlsError);
+
+        // Try direct insert with detailed logging
+        console.log(
+          `📥 Attempting direct insert: user=${userId}, customer=${customerId}`
+        );
+
+        const insertResult = await supabase.from("stripe_customers").insert([
+          {
+            id: userId,
+            stripe_customer_id: customerId,
+          },
+        ]);
+
+        console.log(`📄 Insert result:`, {
+          data: insertResult.data,
+          error: insertResult.error
+            ? {
+                message: insertResult.error.message,
+                details: insertResult.error.details,
+                hint: insertResult.error.hint,
+                code: insertResult.error.code,
+              }
+            : null,
+          status: insertResult.status,
+          statusText: insertResult.statusText,
+        });
+
+        // Try raw SQL insert as a fallback
+        if (insertResult.error) {
+          console.log(`🔄 Trying SQL insert fallback`);
+
+          const sqlResult = await supabase.rpc("execute_direct_insert", {
+            user_id: userId,
+            customer_id: customerId,
+          });
+
+          console.log(`📄 SQL insert result:`, {
+            data: sqlResult.data,
+            error: sqlResult.error
+              ? {
+                  message: sqlResult.error.message,
+                  details: sqlResult.error.details,
+                  hint: sqlResult.error.hint,
+                  code: sqlResult.error.code,
+                }
+              : null,
+          });
+
+          if (sqlResult.error) {
+            return new Response(
+              JSON.stringify({
+                test: "direct-insert",
+                success: false,
+                standard_insert: { success: false, error: insertResult.error },
+                sql_insert: { success: false, error: sqlResult.error },
+              }),
+              {
+                headers: { "Content-Type": "application/json" },
+              }
+            );
+          } else {
+            return new Response(
+              JSON.stringify({
+                test: "direct-insert",
+                success: true,
+                message: "SQL insert succeeded but standard insert failed",
+                standard_insert: { success: false, error: insertResult.error },
+                sql_insert: { success: true },
+              }),
+              {
+                headers: { "Content-Type": "application/json" },
+              }
+            );
+          }
+        } else {
+          return new Response(
+            JSON.stringify({
+              test: "direct-insert",
+              success: true,
+              message: "Standard insert succeeded",
+              standard_insert: { success: true },
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        }
+      } catch (e) {
+        console.error(`❌ Unexpected error during test:`, e);
+        return new Response(
+          JSON.stringify({
+            test: "direct-insert",
+            success: false,
+            error: e.toString(),
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+    }
+
+    // Generic info for any other GET request
+    return new Response(
+      JSON.stringify({
+        message:
+          "This is a webhook endpoint. Use POST for webhook events or GET /test-insert for testing.",
+        version: WEBHOOK_VERSION,
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
 
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  // Log environment details
-  console.log("🌐 SUPABASE_URL:", Deno.env.get("SUPABASE_URL"));
-  console.log(
-    "🔑 SERVICE_ROLE_KEY (first 8 chars):",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.slice(0, 8)
-  );
-
   const sig = req.headers.get("stripe-signature");
-  console.log("🔐 Stripe signature present:", !!sig);
-
   const body = await req.text();
-  console.log("📦 Request body length:", body.length);
+
+  console.log(
+    `📦 [${WEBHOOK_VERSION}] Request body length: ${body.length} chars`
+  );
 
   let event;
   try {
@@ -49,143 +191,191 @@ serve(async (req) => {
       sig!,
       endpointSecret
     );
-    console.log("✅ Webhook signature verified successfully");
-    console.log("📨 Event type:", event.type);
+    console.log(
+      `✅ [${WEBHOOK_VERSION}] Webhook verified. Event type: ${event.type}`
+    );
   } catch (err) {
-    console.error("❌ Webhook signature verification failed:", err);
-    return new Response("Webhook Error", { status: 400 });
+    console.error(`❌ [${WEBHOOK_VERSION}] Webhook verification failed:`, err);
+    return new Response("Webhook Error: Invalid signature", { status: 400 });
   }
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
-    console.log("💳 Checkout session completed:", session.id);
-
     const email = session.customer_email;
     const customer_id = session.customer;
 
-    console.log("📧 Customer email:", email);
-    console.log("👤 Stripe customer ID:", customer_id);
-
-    if (!email) {
-      console.error("❌ Missing customer_email in session");
-      return new Response(JSON.stringify({ error: "Missing customer email" }), {
-        status: 200, // Still return 200 to avoid Stripe retries
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    if (!customer_id) {
-      console.error("❌ Missing customer_id in session");
-      console.error("📋 Full session data:", JSON.stringify(session));
-      return new Response(JSON.stringify({ error: "Missing customer ID" }), {
-        status: 200, // Still return 200 to avoid Stripe retries
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    console.log(
+      `💳 [${WEBHOOK_VERSION}] Checkout completed for ${email} with customer ID ${customer_id}`
+    );
 
     try {
-      // STEP 1: Update users.paid to true
-      console.log("🔄 Updating paid status for email:", email);
-      const { data: updateData, error: updateError } = await supabase
+      // STEP 1: Update user paid status - This part works
+      console.log(`💰 Updating paid status for email: ${email}`);
+      const updateResult = await supabase
         .from("users")
         .update({ paid: true })
-        .eq("email", email)
-        .select();
+        .eq("email", email);
 
-      if (updateError) {
-        console.error("❌ Error updating paid status:", updateError);
-      } else {
-        console.log("✅ Successfully updated paid status:", updateData);
-      }
+      console.log(`📄 Update result:`, {
+        data: updateResult.data,
+        error: updateResult.error
+          ? {
+              message: updateResult.error.message,
+              details: updateResult.error.details,
+              hint: updateResult.error.hint,
+              code: updateResult.error.code,
+            }
+          : null,
+        status: updateResult.status,
+        statusText: updateResult.statusText,
+      });
 
-      // STEP 2: Get user by email to find their UUID
-      console.log("🔍 Looking up user by email:", email);
-      const { data: userData, error: userError } = await supabase
+      // STEP 2: Get user ID from email
+      console.log(`🔍 Looking up user ID for email: ${email}`);
+      const userResult = await supabase
         .from("users")
-        .select("id, email")
+        .select("id")
         .eq("email", email)
-        .single();
-
-      if (userError) {
-        console.error("❌ Error finding user by email:", userError);
-        return new Response(JSON.stringify({ error: "User lookup failed" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      if (!userData) {
-        console.error("❌ No user found with email:", email);
-        return new Response(JSON.stringify({ error: "User not found" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      console.log("✅ Found user:", userData);
-
-      // STEP 3: Insert stripe customer record
-      console.log("🔄 Saving stripe_customer record for user ID:", userData.id);
-      console.log("🔄 Using stripe customer ID:", customer_id);
-
-      // First check if a record already exists
-      const { data: existingCustomer, error: checkError } = await supabase
-        .from("stripe_customers")
-        .select("*")
-        .eq("id", userData.id)
         .maybeSingle();
 
-      if (checkError) {
-        console.error(
-          "❌ Error checking for existing stripe_customer:",
-          checkError
-        );
-      } else {
-        console.log(
-          "🔍 Existing stripe_customer check result:",
-          existingCustomer
-        );
-      }
+      console.log(`📄 User lookup result:`, {
+        data: userResult.data,
+        error: userResult.error
+          ? {
+              message: userResult.error.message,
+              details: userResult.error.details,
+              hint: userResult.error.hint,
+              code: userResult.error.code,
+            }
+          : null,
+        status: userResult.status,
+        statusText: userResult.statusText,
+      });
 
-      // Based on whether record exists, update or insert
-      let operation;
-      if (existingCustomer) {
-        console.log("🔄 Updating existing stripe_customer record");
-        operation = supabase
-          .from("stripe_customers")
-          .update({ stripe_customer_id: customer_id })
-          .eq("id", userData.id);
-      } else {
-        console.log("🔄 Inserting new stripe_customer record");
-        operation = supabase.from("stripe_customers").insert([
+      if (userResult.error || !userResult.data) {
+        console.error(`❌ Failed to find user for email: ${email}`);
+        return new Response(
+          JSON.stringify({
+            received: true,
+            error: "User lookup failed",
+          }),
           {
-            id: userData.id,
-            stripe_customer_id: customer_id,
-          },
-        ]);
+            headers: { "Content-Type": "application/json" },
+          }
+        );
       }
 
-      const { data: customerData, error: customerError } = await operation;
+      const userId = userResult.data.id;
+      console.log(`🆔 Found user ID: ${userId}`);
 
-      if (customerError) {
-        console.error("❌ Error saving stripe_customer:", customerError);
-        console.error("❌ Attempted data:", {
-          id: userData.id,
+      // STEP 3: Insert stripe customer record
+      console.log(`💳 Inserting stripe customer record for user ID: ${userId}`);
+
+      // Try standard insert
+      const insertResult = await supabase.from("stripe_customers").insert([
+        {
+          id: userId,
           stripe_customer_id: customer_id,
+        },
+      ]);
+
+      console.log(`📄 Insert result:`, {
+        data: insertResult.data,
+        error: insertResult.error
+          ? {
+              message: insertResult.error.message,
+              details: insertResult.error.details,
+              hint: insertResult.error.hint,
+              code: insertResult.error.code,
+            }
+          : null,
+        status: insertResult.status,
+        statusText: insertResult.statusText,
+      });
+
+      // If standard insert fails, try SQL fallback
+      if (insertResult.error) {
+        console.log(`🔄 Standard insert failed, trying SQL fallback`);
+
+        const sqlResult = await supabase.rpc("execute_direct_insert", {
+          user_id: userId,
+          customer_id: customer_id,
         });
-        console.error("❌ ID type:", typeof userData.id);
+
+        console.log(`📄 SQL insert result:`, {
+          data: sqlResult.data,
+          error: sqlResult.error
+            ? {
+                message: sqlResult.error.message,
+                details: sqlResult.error.details,
+                hint: sqlResult.error.hint,
+                code: sqlResult.error.code,
+              }
+            : null,
+        });
+
+        if (sqlResult.error) {
+          console.error(`❌ Both insert methods failed`);
+          return new Response(
+            JSON.stringify({
+              received: true,
+              success: false,
+              update_status: !updateResult.error,
+              insert_status: false,
+              sql_status: false,
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        } else {
+          console.log(`✅ SQL insert succeeded`);
+          return new Response(
+            JSON.stringify({
+              received: true,
+              success: true,
+              message: "Used SQL fallback",
+              update_status: !updateResult.error,
+              insert_status: false,
+              sql_status: true,
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        }
       } else {
-        console.log("✅ Successfully saved stripe_customer:", customerData);
+        console.log(`✅ Standard insert succeeded`);
+        return new Response(
+          JSON.stringify({
+            received: true,
+            success: true,
+            message: "Standard insert worked",
+            update_status: !updateResult.error,
+            insert_status: true,
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+          }
+        );
       }
     } catch (error) {
-      console.error("❌ Unexpected error in webhook handler:", error);
-      return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 200, // Still return 200 to avoid Stripe retries
-        headers: { "Content-Type": "application/json" },
-      });
+      console.error(`❌ [${WEBHOOK_VERSION}] Unexpected error:`, error);
+      return new Response(
+        JSON.stringify({
+          received: true,
+          error: "Internal server error",
+          details: error.toString(),
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
   } else {
-    console.log("ℹ️ Ignoring non-checkout event:", event.type);
+    console.log(
+      `ℹ️ [${WEBHOOK_VERSION}] Ignoring non-checkout event: ${event.type}`
+    );
   }
 
   return new Response(JSON.stringify({ received: true }), {
