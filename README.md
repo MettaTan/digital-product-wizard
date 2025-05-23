@@ -20,19 +20,54 @@ pip install -r requirements.txt
 
 ### 3. Set Up Environment Variables
 
-You need 3 keys:
+#### Main App Environment Variables
+
+You need 3 keys for the main app:
 
 - OPENAI_API_KEY
 - JAMAI_API_KEY
 - JAMAI_PROJECT_ID
 
-Create your .env:
+Create your main .env file:
 
-```
+```bash
 cp .env.example .env
 ```
 
-Then edit .env and paste in your real keys. (.env is already in .gitignore.)
+Then edit .env and paste in your real keys.
+
+#### Stripe & Supabase Environment Variables
+
+You also need 6 keys for Stripe payments and Supabase database:
+
+- SUPABASE_URL
+- SUPABASE_KEY (anon public key)
+- SUPABASE_SERVICE_ROLE_KEY
+- STRIPE_PUBLISHABLE_KEY
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
+
+Create your Stripe/Supabase .env file:
+
+```bash
+cp supabase/functions/stripe-webhook/.env.example supabase/functions/stripe-webhook/.env
+```
+
+Then edit `supabase/functions/stripe-webhook/.env` and paste in your real keys.
+
+**How to get these keys:**
+
+1. **Supabase Keys**: Go to [Supabase Dashboard](https://supabase.com/dashboard) → Your Project → Settings → API
+   - Copy "Project URL" as `SUPABASE_URL`
+   - Copy "anon public" key as `SUPABASE_KEY`
+   - Copy "service_role" key as `SUPABASE_SERVICE_ROLE_KEY`
+
+2. **Stripe Keys**: Go to [Stripe Dashboard](https://dashboard.stripe.com/) → Developers → API Keys
+   - Copy "Publishable key" as `STRIPE_PUBLISHABLE_KEY`
+   - Copy "Secret key" as `STRIPE_SECRET_KEY`
+   - For webhook secret: Go to Developers → Webhooks → Create/Edit webhook → Copy "Signing secret" as `STRIPE_WEBHOOK_SECRET`
+
+> 📝 Both .env files are already in .gitignore and won't be committed to Git.
 
 ### 4. Install Required System Dependencies
 
@@ -86,10 +121,9 @@ brew install ffmpeg tesseract
 sudo apt update && sudo apt install ffmpeg tesseract-ocr
 ```
 
-
 ### 4.5 Set Up Supabase CLI and Docker (for Stripe Webhook)
 
-To deploy the Stripe webhook to Supabase Edge Functions, you’ll need:
+To deploy the Stripe webhook to Supabase Edge Functions, you'll need:
 
 - ✅ [Supabase CLI](https://github.com/supabase/cli)
 - ✅ [Docker Desktop](https://www.docker.com/products/docker-desktop) (for function bundling)
@@ -122,7 +156,7 @@ brew install supabase/tap/supabase
 brew install --cask docker
 ```
 
-> Open Docker Desktop after install and ensure it’s running.
+> Open Docker Desktop after install and ensure it's running.
 
 ### 5. Run the Script
 
@@ -130,8 +164,7 @@ brew install --cask docker
 python script.py
 ```
 
-
-### 5. Deploy the Stripe Webhook
+### 6. Deploy the Stripe Webhook
 
 In your project folder:
 
@@ -140,9 +173,19 @@ supabase login
 supabase functions deploy stripe-webhook
 ```
 
-> ✅ Once deployed, your webhook will live on Supabase’s servers and run 24/7 — even if your laptop is offline.
+> ✅ Once deployed, your webhook will live on Supabase's servers and run 24/7 — even if your laptop is offline.
 
-### 6. Run the App
+### 7. Copy Environment Variables for Local Testing
+
+For local development, copy the Stripe/Supabase environment variables to your main directory:
+
+```bash
+cp supabase/functions/stripe-webhook/.env .env.stripe
+```
+
+Then load both environment files in your app or merge them into your main `.env` file.
+
+### 8. Run the App
 
 ```
 streamlit run app.py
